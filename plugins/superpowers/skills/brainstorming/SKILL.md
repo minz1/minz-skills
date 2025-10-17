@@ -55,7 +55,7 @@ Brainstorming Progress:
 ### Phase 4: Worktree Setup (for implementation)
 When design is approved and implementation will follow:
 - Announce: "I'm using the using-git-worktrees skill to set up an isolated workspace."
-- Switch to skills/collaboration/using-git-worktrees
+- **REQUIRED SUB-SKILL:** Use using-git-worktrees
 - Follow that skill's process for directory selection, safety verification, and setup
 - Return here when worktree ready
 
@@ -64,7 +64,7 @@ Ask: "Ready to create the implementation plan?"
 
 When your human partner confirms (any affirmative response):
 - Announce: "I'm using the writing-plans skill to create the implementation plan."
-- Switch to skills/collaboration/writing-plans skill
+- **REQUIRED SUB-SKILL:** Use writing-plans
 - Create detailed plan in the worktree
 
 ## When to Revisit Earlier Phases
