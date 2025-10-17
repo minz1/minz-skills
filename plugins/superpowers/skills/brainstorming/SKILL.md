@@ -15,13 +15,13 @@ Transform rough ideas into fully-formed designs through structured questioning a
 
 ## Quick Reference
 
-| Phase | Key Activities | Output |
-|-------|---------------|--------|
-| **1. Understanding** | Ask questions (one at a time) | Purpose, constraints, criteria |
-| **2. Exploration** | Propose 2-3 approaches | Architecture options with trade-offs |
-| **3. Design Presentation** | Present in 200-300 word sections | Complete design with validation |
-| **4. Worktree Setup** | Set up isolated workspace | Ready development environment |
-| **5. Planning Handoff** | Create implementation plan | Detailed task breakdown |
+| Phase | Key Activities | Tool Usage | Output |
+|-------|---------------|------------|--------|
+| **1. Understanding** | Ask questions (one at a time) | AskUserQuestion for choices | Purpose, constraints, criteria |
+| **2. Exploration** | Propose 2-3 approaches | AskUserQuestion for approach selection | Architecture options with trade-offs |
+| **3. Design Presentation** | Present in 200-300 word sections | Open-ended questions | Complete design with validation |
+| **4. Worktree Setup** | Set up isolated workspace | using-git-worktrees skill | Ready development environment |
+| **5. Planning Handoff** | Create implementation plan | writing-plans skill | Detailed task breakdown |
 
 ## The Process
 
@@ -39,18 +39,38 @@ Brainstorming Progress:
 ### Phase 1: Understanding
 - Check current project state in working directory
 - Ask ONE question at a time to refine the idea
-- Prefer multiple choice when possible
+- **Use AskUserQuestion tool** when you have multiple choice options
 - Gather: Purpose, constraints, success criteria
+
+**Example using AskUserQuestion:**
+```
+Question: "Where should the authentication data be stored?"
+Options:
+  - "Session storage" (clears on tab close, more secure)
+  - "Local storage" (persists across sessions, more convenient)
+  - "Cookies" (works with SSR, compatible with older approach)
+```
 
 ### Phase 2: Exploration
 - Propose 2-3 different approaches
 - For each: Core architecture, trade-offs, complexity assessment
+- **Use AskUserQuestion tool** to present approaches as structured choices
 - Ask your human partner which approach resonates
+
+**Example using AskUserQuestion:**
+```
+Question: "Which architectural approach should we use?"
+Options:
+  - "Event-driven with message queue" (scalable, complex setup, eventual consistency)
+  - "Direct API calls with retry logic" (simple, synchronous, easier to debug)
+  - "Hybrid with background jobs" (balanced, moderate complexity, best of both)
+```
 
 ### Phase 3: Design Presentation
 - Present in 200-300 word sections
 - Cover: Architecture, components, data flow, error handling, testing
-- Ask after each section: "Does this look right so far?"
+- Ask after each section: "Does this look right so far?" (open-ended)
+- Use open-ended questions here to allow freeform feedback
 
 ### Phase 4: Worktree Setup (for implementation)
 When design is approved and implementation will follow:
@@ -66,6 +86,33 @@ When your human partner confirms (any affirmative response):
 - Announce: "I'm using the writing-plans skill to create the implementation plan."
 - **REQUIRED SUB-SKILL:** Use writing-plans
 - Create detailed plan in the worktree
+
+## Question Patterns
+
+### When to Use AskUserQuestion Tool
+
+**Use AskUserQuestion for:**
+- Phase 1: Clarifying questions with 2-4 clear options
+- Phase 2: Architectural approach selection (2-3 alternatives)
+- Any decision with distinct, mutually exclusive choices
+- When options have clear trade-offs to explain
+
+**Benefits:**
+- Structured presentation of options with descriptions
+- Clear trade-off visibility for partner
+- Forces explicit choice (prevents vague "maybe both" responses)
+
+### When to Use Open-Ended Questions
+
+**Use open-ended questions for:**
+- Phase 3: Design validation ("Does this look right so far?")
+- When you need detailed feedback or explanation
+- When partner should describe their own requirements
+- When structured options would limit creative input
+
+**Example decision flow:**
+- "What authentication method?" → Use AskUserQuestion (2-4 options)
+- "Does this design handle your use case?" → Open-ended (validation)
 
 ## When to Revisit Earlier Phases
 
@@ -100,7 +147,8 @@ digraph revisit_phases {
 
 | Principle | Application |
 |-----------|-------------|
-| **One question at a time** | Phase 1: Single question per message for clarity |
+| **One question at a time** | Phase 1: Single question per message, use AskUserQuestion for choices |
+| **Structured choices** | Use AskUserQuestion tool for 2-4 options with trade-offs |
 | **YAGNI ruthlessly** | Remove unnecessary features from all designs |
 | **Explore alternatives** | Always propose 2-3 approaches before settling |
 | **Incremental validation** | Present design in sections, validate each |
