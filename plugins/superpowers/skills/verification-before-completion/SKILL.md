@@ -46,6 +46,11 @@ Skip any step = lying, not verifying
 | Regression test works | Red-green cycle verified | Test passes once |
 | Agent completed | VCS diff shows changes | Agent reports "success" |
 | Requirements met | Line-by-line checklist | Tests passing |
+| Nix change correct | `nix build` of each affected host (or `nix flake check`) exit 0 | `nix eval` of one option, "it's just config" |
+| Tofu change correct | `tofu plan` shows exactly the intended diff | `tofu validate` |
+| Deployed / fixed live | Unit active, journal clean since restart, and the real behavior probed on the host | Deploy exited 0 |
+| Live-host check passed | Its actual stdout/stderr read and matching | Exit code alone |
+| Docs/handoff says done | The file or state verified on disk / on the host now | A memory or handoff claiming "done" |
 
 ## Red Flags - STOP
 

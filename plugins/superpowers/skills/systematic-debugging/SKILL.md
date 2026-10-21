@@ -84,26 +84,24 @@ You MUST complete each phase before proceeding to the next.
    THEN investigate that specific component
    ```
 
-   **Example (multi-layer system):**
+   **Example (multi-layer system: edge proxy → host proxy → service):**
    ```bash
-   # Layer 1: Workflow
-   echo "=== Secrets available in workflow: ==="
-   echo "IDENTITY: ${IDENTITY:+SET}${IDENTITY:-UNSET}"
+   # Layer 1: what the client gets at the edge
+   curl -sSv https://app.example/health 2>&1 | grep -E '^< HTTP|^\* (SSL|subject)'
 
-   # Layer 2: Build script
-   echo "=== Env vars in build script: ==="
-   env | grep IDENTITY || echo "IDENTITY not in environment"
+   # Layer 2: the host proxy, bypassing the edge
+   ssh host 'curl -sS -o /dev/null -w "%{http_code}\n" --resolve app.example:443:127.0.0.1 https://app.example/health'
 
-   # Layer 3: Signing script
-   echo "=== Keychain state: ==="
-   security list-keychains
-   security find-identity -v
+   # Layer 3: the backend directly
+   ssh host 'curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:PORT/health'
 
-   # Layer 4: Actual signing
-   codesign --sign "$IDENTITY" --verbose=4 "$APP"
+   # Layer 4: the unit and its config as actually deployed
+   ssh host 'systemctl status app --no-pager | head -5; journalctl -u app -n 30 --no-pager'
    ```
 
-   **This reveals:** Which layer fails (secrets → workflow ✓, workflow → build ✗)
+   Never print secret values while gathering evidence: check that a secret exists and its owner/mode, not its content.
+
+   **This reveals:** Which layer fails (edge ✗, host proxy ✓ → the problem is between them)
 
 5. **Trace Data Flow**
 
@@ -174,7 +172,7 @@ You MUST complete each phase before proceeding to the next.
    - Automated test if possible
    - One-off test script if no framework
    - MUST have before fixing
-   - Use the `superpowers:test-driven-development` skill for writing proper failing tests
+   - Use the `test-driven-development` skill for writing proper failing tests
 
 2. **Implement Single Fix**
    - Address the root cause identified
@@ -186,7 +184,7 @@ You MUST complete each phase before proceeding to the next.
    - Test passes now?
    - No other tests broken?
    - Issue actually resolved?
-   - Use the `superpowers:verification-before-completion` skill before claiming success
+   - Use the `verification-before-completion` skill before claiming success
 
 4. **If Fix Doesn't Work**
    - STOP

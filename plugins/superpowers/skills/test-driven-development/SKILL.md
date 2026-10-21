@@ -26,6 +26,11 @@ Write the test first. Watch it fail. Write minimal code to pass.
 - Generated code
 - Configuration files
 
+**Declarative infra (Nix, OpenTofu) is not an exception, it uses a different red/green:**
+- Red: before the change, run the check that should flip and watch it show the problem: a `nix eval` of the option, a VM test, `tofu plan` showing the drift, or the live symptom reproduced on the host.
+- Green: after the change, the same check shows the intended state, plus `nix build` of every affected host (or `nix flake check`) succeeds.
+- Bash/Go/Python code inside the repo (scripts, modules with logic) gets real tests as below.
+
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
 ## The Iron Law
