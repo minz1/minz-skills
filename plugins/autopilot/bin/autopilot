@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+usage() {
+  echo "usage: autopilot {start|status|note <text>|stop [--now]} [--run <name>]" >&2
+  exit 2
+}
+fail() { echo "$*" >&2; exit 1; }
+
+[ $# -gt 0 ] || usage
+cmd=$1
+shift
+run_name=
+now=
+words=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --run) [ $# -ge 2 ] || usage; run_name=$2; shift 2 ;;
+    --now) if [ "$cmd" = stop ]; then now=1; else words+=("$1"); fi; shift ;;
+    *) words+=("$1"); shift ;;
+  esac
+done
+case $cmd in
+  start | status | note | stop) ;;
+  *) usage ;;
+esac
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not inside a git repository"
+sess=autopilot-$(basename "$repo" | tr '.:' '__')
+target="=$sess"
+attach="tmux attach -t '$target'"
+cd "$repo" || exit 1
+
+[ -n "$run_name" ] || run_name=$(find .autopilot/runs -mindepth 1 -type d -maxdepth 1 -printf '%f\n' 2>/dev/null | sort -V | tail -1)
+[ -n "$run_name" ] || fail "no autopilot run in $repo; run /autopilot plan first"
+rel=.autopilot/runs/$run_name
+[ -d "$rel" ] || fail "no run $run_name in $repo; run /autopilot plan first"
+
+live() { tmux has-session -t "$target" 2>/dev/null; }
+
+case $cmd in
+  note)
+    [ ${#words[@]} -gt 0 ] || usage
+    printf -- '- %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "${words[*]}" >> "$rel/owner.md"
+    ;;
+  start)
+    live && fail "already running in tmux session $sess; watch with: $attach"
+    if [ -e "$rel/STOP" ]; then
+      rm -f "$rel/STOP"
+      echo "removed leftover STOP file"
+    fi
+    unsets=(-u AUTOPILOT_MODEL -u SLEEP_CMD -u FAKE_SCENARIO)
+    while IFS= read -r v; do unsets+=(-u "$v"); done < <(compgen -e | grep '^CLAUDE')
+    envs=()
+    for v in AUTOPILOT_MODEL CLAUDE_BIN SLEEP_CMD FAKE_SCENARIO; do
+      [ -z "${!v:-}" ] || envs+=(-e "$v=${!v}")
+    done
+    bin=$(dirname "$(readlink -f "$0")")
+    before=$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)
+    env "${unsets[@]}" \
+      tmux new-session -d -s "$sess" -c "$repo" "${envs[@]}" \
+      "$(printf '%q ' bash "$bin/autopilot-runner" "$repo" "$rel")" || fail "tmux could not start session $sess"
+    for _ in $(seq 10); do
+      live || break
+      [ "$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)" -gt "$before" ] && break
+      sleep 0.1
+    done
+    if ! live && [ "$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)" -le "$before" ]; then
+      fail "the runner exited at once; run it by hand to see why: bash $bin/autopilot-runner $repo $rel"
+    fi
+    echo "started run $run_name in tmux session $sess; watch with: $attach"
+    ;;
+  stop)
+    live || { echo "nothing is running"; exit 0; }
+    if [ -n "$now" ]; then
+      tmux kill-session -t "$target"
+      echo "killed tmux session $sess"
+    else
+      touch "$rel/STOP"
+      echo "the run stops after the current session"
+    fi
+    ;;
+  status)
+    plan=$rel/plan.md
+    log=$rel/runner.log
+    last=$(sed -nE 's/^[^ ]+ (session=[0-9]+) (start|end) .*/\1/p' "$log" 2>/dev/null | tail -1)
+    if live; then
+      state=running
+    else
+      state="not running"
+      if [ -n "$last" ]; then
+        endl=$(grep -E "^[^ ]+ $last end " "$log" | tail -1)
+        word=$(sed -nE 's/^[^ ]+ session=[0-9]+ end exit=([A-Za-z]*).*/\1/p' <<<"$endl")
+        case $word in
+          killed | crash | limit) state="not running, ${last/=/ } ended dirty ($word)" ;;
+          "") state="not running, ${last/=/ } ended dirty (no end line)" ;;
+          *) state="not running, ${last/=/ } ended $word" ;;
+        esac
+      fi
+    fi
+    echo "run $run_name: $state"
+    echo "$(grep -c '^- \[x\]' "$plan") done, $(grep -cE '^- \[!!?\]' "$plan") blocked, $(grep -c '^- \[ \]' "$plan") open"
+    echo "next: $(grep -m1 '^- \[ \]' "$plan" || echo none)"
+    echo "handoff:"
+    sed -n '/^## Handoff/,$p' "$plan" | sed 1d | grep . | head -3
+    echo "last session end: $(grep -E '^[^ ]+ session=[0-9]+ end exit=' "$log" 2>/dev/null | tail -1 | cut -d' ' -f2-)"
+    ! live || echo "watch: $attach"
+    ;;
+esac
