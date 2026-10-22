@@ -95,6 +95,13 @@ test_wait_bad_minutes_is_crash() {
   setup; sc 1 "AUTOPILOT: WAIT soon"; sc 2 "$DONE"; go
   eq "$(exits)" "crash DONE" "exits"
 }
+test_template_plan_starts() {
+  setup
+  cp "$DIR/../skills/autopilot/templates/plan.md" "$PLAN"
+  sc 1 "$DONE"
+  go
+  expect_calls 1
+}
 test_done_exits() { setup; sc 1 "$DONE"; go; expect_calls 1; stopped "done"; }
 test_stop_exits() {
   setup; sc 1 "AUTOPILOT: STOP needs owner"; go
@@ -387,6 +394,7 @@ out=$(test_stop_reason_with_quotes 2>/dev/null); t test_stop_reason_with_quotes 
 out=$(test_checkpoint_skips_ignored 2>/dev/null); t test_checkpoint_skips_ignored "$out" $?
 out=$(test_peak_ctx_logged 2>/dev/null); t test_peak_ctx_logged "$out" $?
 out=$(test_peak_ctx_ignores_subagents 2>/dev/null); t test_peak_ctx_ignores_subagents "$out" $?
+out=$(test_template_plan_starts 2>/dev/null); t test_template_plan_starts "$out" $?
 out=$(test_flags 2>/dev/null); t test_flags "$out" $?
 out=$(test_stream_saved 2>/dev/null); t test_stream_saved "$out" $?
 out=$(test_killed_logs_end 2>/dev/null); t test_killed_logs_end "$out" $?

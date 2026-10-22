@@ -1,0 +1,4 @@
+{
+  "name": "autopilot",
+  "description": "Autonomous runs that recycle a fresh orchestrator session per queue item, with a runner that enforces the stop rules."
+}
