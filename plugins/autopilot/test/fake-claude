@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+dir=$FAKE_SCENARIO
+echo $$ > "$dir/fake.pid"
+echo "$* COMPACT=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" >> "$dir/calls"
+n=$(( $(cat "$dir/.n" 2>/dev/null || echo 0) + 1 ))
+f=$dir/$n.json
+if [ ! -f "$f" ]; then
+  echo "scenario exhausted" >&2
+  exit 3
+fi
+echo "$n" > "$dir/.n"
+
+eval "$(jq -r '.exec // empty' "$f")"
+
+s=$(jq -r '.sleep // 0' "$f")
+if [ "$s" != 0 ]; then
+  trap 'kill "$spid" 2>/dev/null; exit 143' TERM
+  sleep "$s" &
+  spid=$!
+  echo "$spid" > "$dir/sleep.pid"
+  wait "$spid"
+  trap - TERM
+fi
+
+jq -c --argjson now "$(date +%s)" '
+  (if has("usage") then .usage else {weekly: 0.62, five_hour: 0.12} end) as $u
+  | {type: "system", subtype: "init", session_id: "fake"},
+    {type: "assistant", parent_tool_use_id: null, message: {usage: {input_tokens: 5, cache_read_input_tokens: 40000, cache_creation_input_tokens: 3000}}},
+    (select(.subagent_ctx) | {type: "assistant", parent_tool_use_id: "toolu_fake", message: {usage: {input_tokens: 5, cache_read_input_tokens: .subagent_ctx, cache_creation_input_tokens: 0}}}),
+    (select($u != null) | {type: "rate_limit_event", rate_limit_info: {status: "allowed_warning", resetsAt: 1792692000, rateLimitType: "seven_day", utilization: $u.weekly, overageStatus: "rejected", overageDisabledReason: "out_of_credits", isUsingOverage: false, surpassedThreshold: 0.75, unifiedWindows: {five_hour: {utilization: $u.five_hour, resetsAt: 1792600200}, seven_day: {utilization: $u.weekly, resetsAt: 1792692000}}, overageEnabled: true}, uuid: "fake", session_id: "fake"}),
+    (select(.limit) | .limit as $l | {type: "rate_limit_event", rate_limit_info: {status: $l.status, rateLimitType: $l.type, resetsAt: ($now + $l.resets_in), isUsingOverage: ($l.overage // false)}, uuid: "fake", session_id: "fake"}),
+    {type: "result", subtype: "success", result: (.text // "")}
+' "$f"
+
+exit "$(jq -r '.rc // 0' "$f")"

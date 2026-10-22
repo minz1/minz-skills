@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -u
+repo=$1
+run=$2
+CLAUDE_BIN=${CLAUDE_BIN:-claude}
+SLEEP_CMD=${SLEEP_CMD:-sleep}
+cd "$repo" || exit 1
+
+child=
+running=
+mode='continue'
+reason=
+crashes=0
+launched=0
+idx=$(mktemp -u)
+
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$run/runner.log"; }
+stop() {
+  log "stopped: $1"
+  echo "stopped: $1" >> "$run/plan.md"
+  exit 0
+}
+
+on_kill() {
+  if [ -n "$running" ]; then
+    n=$running
+    running=
+    log "session=$n end exit=killed detail=\"\" weekly=? five_hour=? peak_ctx=0"
+  fi
+  if [ -n "$child" ]; then
+    kill -- -"$child" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  rm -f "$idx" "$idx.lock"
+  exit 130
+}
+trap on_kill HUP TERM INT
+
+header_value() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$run/plan.md" | head -1; }
+
+read_header() {
+  ceiling=$(header_value weekly-ceiling)
+  cap=$(header_value session-cap)
+  bad=
+  [[ $ceiling =~ ^[0-9]*\.?[0-9]+$ ]] || bad='weekly-ceiling'
+  [[ $cap =~ ^[0-9]+$ ]] || bad='session-cap'
+  [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
+}
+
+nap() {
+  setsid "$SLEEP_CMD" "$1" &
+  child=$!
+  wait "$child"
+  child=
+}
+
+checkpoint() {
+  local tree sha
+  tree=$(export GIT_INDEX_FILE=$idx; git read-tree HEAD && git add -A && git write-tree)
+  sha=$(echo "autopilot checkpoint $1" | GIT_AUTHOR_NAME=autopilot GIT_AUTHOR_EMAIL=autopilot@localhost GIT_COMMITTER_NAME=autopilot GIT_COMMITTER_EMAIL=autopilot@localhost git commit-tree "$tree" -p HEAD)
+  rm -f "$idx"
+  git update-ref "refs/autopilot/$(basename "$run")/$1" "$sha" && echo "$sha"
+}
+
+parse_word() {
+  local m
+  kind=crash detail=
+  [ "$rc" -eq 0 ] || return
+  case $word in
+    NEXT | DONE) kind=$word ;;
+    STOP\ *) kind=STOP detail=${word#STOP } ;;
+    WAIT\ *)
+      m=${word#WAIT }
+      if [[ $m =~ ^[0-9]+$ ]] && ((10#$m > 0)); then kind=WAIT detail=$((10#$m)); fi
+      ;;
+  esac
+}
+
+mkdir -p "$HOME/.autopilot" "$run/sessions"
+read_header || { echo "autopilot-runner: $bad" >&2; exit 2; }
+
+while :; do
+  [ ! -e "$run/STOP" ] || stop "stop file"
+  read_header || stop "$bad"
+  n=$(sed -nE 's/^[^ ]+ session=([0-9]+) (start|end) .*/\1/p' "$run/runner.log" 2>/dev/null | sort -n | tail -1)
+  n=$((${n:-0} + 1))
+  sha=$(checkpoint "$n")
+  [ -n "$sha" ] || stop "checkpoint failed"
+  log "session=$n start mode=$mode checkpoint=$sha"
+  running=$n
+  launched=$((launched + 1))
+
+  args=(-p "/autopilot:autopilot $mode $run" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose)
+  [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
+  stream=$run/sessions/$n.jsonl
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
+  child=$!
+  wait "$child"
+  rc=$?
+  child=
+
+  read -r ltype lreset weekly five peak <<< "$(jq -rs '
+    [.[] | select(.type == "rate_limit_event") | .rate_limit_info] as $r
+    | ([$r[] | select(.status == "rejected" and .isUsingOverage != true)] | last) as $l
+    | ([$r[] | select(.unifiedWindows)] | last) as $u
+    | [(if $l then $l.rateLimitType // "unknown" else "-" end), $l.resetsAt // 0,
+       $u.unifiedWindows.seven_day.utilization // "?", $u.unifiedWindows.five_hour.utilization // "?",
+       ([.[] | select(.type == "assistant" and .parent_tool_use_id == null) | .message.usage
+         | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | max // 0)]
+    | join(" ")' "$stream" 2> /dev/null)"
+  text=$(jq -rs '[.[] | select(.type == "result")] | last.result // ""' "$stream" 2> /dev/null)
+  word=$(printf '%s\n' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep '^AUTOPILOT: ' | tail -1)
+  word=${word#AUTOPILOT: }
+
+  if [ "${ltype:--}" != - ]; then
+    kind=limit detail=$ltype
+  else
+    parse_word
+  fi
+  running=
+  log "session=$n end exit=$kind detail=\"${detail//\"/\'}\" weekly=${weekly:-?} five_hour=${five:-?} peak_ctx=${peak:-0}"
+  printf '%s\n' "$text"
+
+  case $kind in
+    limit)
+      [ "$detail" = five_hour ] || stop "limit $detail reached"
+      wait_s=$((lreset - $(date +%s)))
+      [ "$wait_s" -ge 60 ] || wait_s=60
+      nap "$wait_s"
+      continue
+      ;;
+    DONE) stop "${reason:-done}" ;;
+    STOP) stop "owner needed: $detail" ;;
+    crash)
+      crashes=$((crashes + 1))
+      [ "$crashes" -lt 2 ] || stop "two crashes"
+      continue
+      ;;
+  esac
+  [ "$mode" != wrapup ] || stop "$reason"
+  crashes=0
+  read_header || stop "$bad"
+  if [ "${weekly:-?}" != '?' ] && awk -v a="$weekly" -v b="$ceiling" 'BEGIN { exit !(a + 0 >= b + 0) }'; then
+    reason="weekly usage $weekly" mode=wrapup
+  elif [ "$launched" -ge "$cap" ]; then
+    reason="session cap $cap" mode=wrapup
+  fi
+  [ "$kind" != WAIT ] || nap $((detail * 60))
+done
