@@ -103,6 +103,7 @@ test_env_forwarded() {
   setup; sc 1 "AUTOPILOT: DONE"
   AUTOPILOT_MODEL=haiku ap start
   eq "$RC" 0 "rc"
+  eq "$ERR" "" "first start stderr"
   waitfor "$LOG" "stopped: done"
   has "$(cat "$FAKE_SCENARIO/calls")" "--model haiku" calls
 }

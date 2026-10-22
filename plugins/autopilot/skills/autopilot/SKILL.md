@@ -55,11 +55,11 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
 4. Answer board items addressed to this repo. If the only remaining work waits on another repo (the Final item does not count as remaining work), post to your own board file and exit `WAIT 20`.
 5. Pick the work, first match wins:
    1. the first `[ ]` item (or batch) whose `after:` items are done; skip an item with `waiting: <id>` until an `ack <id>` line appears in another repo's board file; then remove `waiting:` and work it
-   2. a `[!]` item not yet revisited: one fresh attempt that starts from its failure notes in `log.md` and tries a different approach
+   2. a `[!]` item (every `[!]` is still unrevisited): its one revisit, a fresh attempt that starts from its failure notes in `log.md` and tries a different approach
    3. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty
    4. the Final item
 6. Work it: subagents, worktrees, fleets. Anything found along the way goes under Discovered (open scope, in the mandate) or the Parking lot (bounded scope, out of scope, or on the stop list). Never work a Parking lot item.
-7. Run its check. Pass: mark `[x]`; push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; failed revisit `[!!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt.
+7. Run its check. Pass: mark `[x]`; push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; a failed revisit (5.2) changes `[!]` to `[!!]` with `revisit failed: <reason>`, since a revisited item never stays `[!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt. Then go to step 8: one item (or batch) per session, never a second pick.
 8. Rewrite the Handoff section of `plan.md` (state, open branches and worktrees, what the next session must know; at most ~40 lines). It lists every running fleet agent with its log path and last-known state (running, exited N, silent since). Append the long version to `<run-dir>/log.md`.
 9. Final message: exactly one exit line, `AUTOPILOT: <word>`, in plain text (no bold, no code span, nothing before it on the line). It must be the last such line of the message; other plugins' closing text may follow it and is ignored. `<word>` is one of:
    - `NEXT`: relaunch now

@@ -54,16 +54,16 @@ case $cmd in
       [ -z "${!v:-}" ] || envs+=(-e "$v=${!v}")
     done
     bin=$(dirname "$(readlink -f "$0")")
-    before=$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)
+    before=$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)
     env "${unsets[@]}" \
       tmux new-session -d -s "$sess" -c "$repo" "${envs[@]}" \
       "$(printf '%q ' bash "$bin/autopilot-runner" "$repo" "$rel")" || fail "tmux could not start session $sess"
     for _ in $(seq 10); do
       live || break
-      [ "$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)" -gt "$before" ] && break
+      [ "$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)" -gt "$before" ] && break
       sleep 0.1
     done
-    if ! live && [ "$(wc -l < "$rel/runner.log" 2>/dev/null || echo 0)" -le "$before" ]; then
+    if ! live && [ "$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)" -le "$before" ]; then
       fail "the runner exited at once; run it by hand to see why: bash $bin/autopilot-runner $repo $rel"
     fi
     echo "started run $run_name in tmux session $sess; watch with: $attach"
