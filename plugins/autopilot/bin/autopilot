@@ -75,7 +75,7 @@ case $cmd in
       echo "killed tmux session $sess"
     else
       touch "$rel/STOP"
-      echo "the run stops after the current session"
+      echo "the run stops before its next session starts (after the current session or wait)"
     fi
     ;;
   status)

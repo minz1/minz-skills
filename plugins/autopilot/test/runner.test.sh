@@ -326,6 +326,11 @@ test_flags() {
     call_has 1 "$f"
   done
 }
+test_claude_env_scrubbed() {
+  setup; sc 1 "$DONE"
+  CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=x go
+  calls | sed -n 1p | grep -q 'CLAUDE_VARS=$' || die "claude saw CLAUDE vars: $(calls)"
+}
 test_stream_saved() {
   setup; sc 1 "$DONE"; go
   eq "$(wc -l < "$RUN/sessions/1.jsonl")" 4 "stream lines"
@@ -396,6 +401,7 @@ out=$(test_peak_ctx_logged 2>/dev/null); t test_peak_ctx_logged "$out" $?
 out=$(test_peak_ctx_ignores_subagents 2>/dev/null); t test_peak_ctx_ignores_subagents "$out" $?
 out=$(test_template_plan_starts 2>/dev/null); t test_template_plan_starts "$out" $?
 out=$(test_flags 2>/dev/null); t test_flags "$out" $?
+out=$(test_claude_env_scrubbed 2>/dev/null); t test_claude_env_scrubbed "$out" $?
 out=$(test_stream_saved 2>/dev/null); t test_stream_saved "$out" $?
 out=$(test_killed_logs_end 2>/dev/null); t test_killed_logs_end "$out" $?
 exit $fail

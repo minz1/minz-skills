@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 dir=$FAKE_SCENARIO
 echo $$ > "$dir/fake.pid"
-echo "$* COMPACT=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" >> "$dir/calls"
+echo "$* COMPACT=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-} CLAUDE_VARS=$(compgen -e | grep '^CLAUDE' | grep -vxe CLAUDE_BIN -e CLAUDE_CODE_AUTO_COMPACT_WINDOW | paste -sd,)" >> "$dir/calls"
 n=$(( $(cat "$dir/.n" 2>/dev/null || echo 0) + 1 ))
 f=$dir/$n.json
 if [ ! -f "$f" ]; then

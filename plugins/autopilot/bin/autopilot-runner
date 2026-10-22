@@ -4,6 +4,7 @@ repo=$1
 run=$2
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 SLEEP_CMD=${SLEEP_CMD:-sleep}
+for v in $(compgen -e | grep '^CLAUDE' | grep -vx CLAUDE_BIN); do unset "$v"; done
 cd "$repo" || exit 1
 
 child=

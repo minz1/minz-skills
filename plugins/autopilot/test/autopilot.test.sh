@@ -126,7 +126,7 @@ test_stop_creates_stop() {
   setup; start_run; ap stop
   eq "$RC" 0 "rc"
   [ -e "$R2/STOP" ] || die "no STOP file"
-  has "$OUT" "after the current session" stdout
+  has "$OUT" "before its next session starts" stdout
   tmux has-session -t "=autopilot-repo" 2>/dev/null || die "session died after plain stop"
 }
 
