@@ -95,6 +95,20 @@ test_board_open_requests() {
   has "$(head -1 <<<"$OUT")" "open: a-2 → b" open; lacks "$(head -1 <<<"$OUT")" "a-1 →" open
   has "$OUT" "b           ack a-1: ok" last
 }
+test_hostile_plan_values() {
+  setup; sed -i 's/^owner-notes-applied: 0/owner-notes-applied: a[$(touch '"$W"'\/pwned)]/' "$PLAN"; echo "- n" > "$RUN/owner.md"
+  printf 'now: 1|.*\n' >> "$PLAN"; frame
+  [ ! -e "$W/pwned" ] || die "arithmetic injection ran"; has "$OUT" "notes 0/1" notes
+}
+test_control_chars_stripped() {
+  setup; live; session_start 4 1
+  printf '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"a\\u001b]52;c;Zm9v\\u0007b"}]}}\n' > "$RUN/sessions/4.jsonl"
+  printf -- '- [ ] 1. x\033]0;title\007y\n' >> "$PLAN"
+  local b=$W/board; mkdir -p "$b"; printf -- '- p-1 → r\033[2Jx: y\n' > "$b/p.md"
+  local raw; raw=$(bash "$WATCH" --once --width 100 --height 12 "$repo"; bash "$WATCH" board --once --width 100 --height 3 "$b")
+  ! grep -qP '\x1b\]|\x07|\x1b\[2J' <<<"$raw" || die "control sequence passed through"
+  has "$(plain <<<"$raw")" "ab" text
+}
 test_spaced_repo() { setup "my repo"; live; session_start 1 1; frame; has "$(first)" "my repo · WORKING s1" header; }
 
 fail=0

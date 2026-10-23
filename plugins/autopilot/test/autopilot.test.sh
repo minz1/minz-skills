@@ -266,6 +266,27 @@ test_status_cleans_control_chars() {
   ap status
   ! grep -qP '\x1b|\x07' <<<"$OUT" || die "control chars in status"; eq "$ERR" "" stderr; has "$OUT" "now: 1. a]0;tb" now
 }
+test_usage_lists_dash_watch() { setup; ap bogus; has "$ERR" "watch|dash" usage; }
+test_dash_without_runs() {
+  setup; TMUX=x ap dash; [ "$RC" != 0 ] || die "rc 0"; has "$ERR" "no autopilot-* tmux sessions" stderr
+}
+test_dash_builds_panes() {
+  setup; local other=$W/other; mkdir -p "$other/.autopilot/runs/r"; printf 'weekly-ceiling: 0.8\nsession-cap: 5\n' > "$other/.autopilot/runs/r/plan.md"
+  mkdir -p "$HOME/.autopilot/b"; printf -- '- x-1 → repo: hi\n' > "$HOME/.autopilot/b/x.md"; echo 'board: ~/.autopilot/b/' >> "$R2/plan.md"
+  tmux new-session -d -s autopilot-repo -c "$repo" 'sleep 600'; tmux new-session -d -s autopilot-other -c "$other" 'sleep 600'
+  TMUX=x ap dash
+  eq "$RC" 0 "rc"; has "$OUT" "TMUX= tmux -L autopilot-dash attach" stdout
+  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
+  sleep 2
+  eq "$(tmux -L autopilot-dash list-panes -t =dash | wc -l)" 3 panes
+  tmux -L autopilot-dash list-panes -t =dash -F '#{pane_dead} #{history_limit} #{alternate_on}' | while read -r d h a; do
+    eq "$d $h $a" "0 0 1" "pane state"
+  done
+  local all; all=$(for i in 0 1 2; do tmux -L autopilot-dash capture-pane -p -t "=dash:0.$i"; done)
+  has "$all" "repo · " pane; has "$all" "other · " pane; has "$all" "open: x-1 → repo" board
+  tmux -L autopilot-dash kill-server
+}
+test_watch_once_via_cli() { setup; bash "$DIR/../bin/autopilot-watch" --once --width 60 --height 8 "$repo" | grep -q 'repo · ' || die "no header"; }
 test_session_name_sanitized() {
   setup my.repo; start_run
   tmux has-session -t "=autopilot-my_repo" 2>/dev/null || die "no session autopilot-my_repo"

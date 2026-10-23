@@ -10,6 +10,8 @@ usage() {
   exit 2
 }
 
+clean() { tr -d '\000-\010\013-\037\177'; }
+num() { [[ ${1:-} =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
 now_s() { echo "${AUTOPILOT_NOW:-$(date +%s)}"; }
 ago() { local s=$1; ((s < 60)) && echo "<1m" || { ((s < 5400)) && echo "$((s / 60))m" || echo "$((s / 3600))h"; }; }
 hv() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$2" 2>/dev/null | head -1; }
@@ -23,12 +25,13 @@ board_path() {
 
 render_stream() { # <jsonl> <width> <sub> <think> <compact>
   tail -n 1500 "$1" 2>/dev/null | jq -r --argjson sub "$3" --argjson think "$4" --argjson compact "$5" '
-    def one: tostring | gsub("[\r\t]"; " ") | split("\n")[0];
+    def clean: tostring | gsub("[\u0000-\u0008\u000b-\u001f\u007f-\u009f]"; "");
+    def one: clean | gsub("[\r\t]"; " ") | split("\n")[0];
     select(.type == "assistant" or .type == "user")
     | select($sub == 1 or .parent_tool_use_id == null)
     | (if .parent_tool_use_id then "│ " else "" end) as $p
     | .message.content[]?
-    | if .type == "text" and $compact == 0 then (.text | split("\n") | map(select(test("\\S"))) | .[] | "T|\($p)\(gsub("\t"; "  "))")
+    | if .type == "text" and $compact == 0 then (.text | clean | split("\n") | map(select(test("\\S"))) | .[] | "T|\($p)\(gsub("\t"; "  "))")
       elif .type == "thinking" and $think == 1 then "K|\($p)· thinking"
       elif .type == "tool_use" then
         "U|\($p)▸ \(.name) " + ((.input.description // .input.command // .input.file_path // .input.pattern // .input.prompt // .input.url // "") | one)
@@ -102,7 +105,7 @@ state_of() { # <repo> [run] -> st label stream info[]
       label+=" · usage limit"
     fi
   else
-    r=$(sed -nE 's/^[^ ]+ stopped: (.*)/\1/p' <<<"$after" | tail -1)
+    r=$(sed -nE 's/^[^ ]+ stopped: (.*)/\1/p' <<<"$after" | tail -1 | clean)
     if [ -n "$endl" ] && [ -n "$r" ] && ! [[ $r =~ ^(owner\ needed|two\ crashes|limit|checkpoint|.*no\ valid) ]]; then
       st=done label="STOPPED: $r"
     else
@@ -114,10 +117,11 @@ state_of() { # <repo> [run] -> st label stream info[]
 
   local item hist ctx br up notes applied weekly five ceil work cap nowv
   nowv=$(hv now "$plan")
+  [[ $nowv =~ ^[0-9]+$ ]] || nowv=
   item=
   [ -z "$nowv" ] || item=$(grep -m1 -E "^- \[[^]]*\] *$nowv\." "$plan")
   [ -n "$item" ] || item=$(grep -m1 '^- \[ \]' "$plan" 2>/dev/null)
-  item=$(sed -E 's/^- \[[^]]*\] *//; s/[[:space:]]{2,}(after|check|waiting):.*//' <<<"$item")
+  item=$(sed -E 's/^- \[[^]]*\] *//; s/[[:space:]]{2,}(after|check|waiting):.*//' <<<"$item" | clean)
   weekly=$(grep -oE 'weekly=[0-9.]+' <<<"$endl" | cut -d= -f2)
   five=$(grep -oE 'five_hour=[0-9.]+' <<<"$endl" | cut -d= -f2)
   ceil=$(hv weekly-ceiling "$plan")
@@ -130,10 +134,8 @@ state_of() { # <repo> [run] -> st label stream info[]
         printf "%s%s ", c, z }')
   br=$(git --no-optional-locks -C "$repo" branch --show-current 2>/dev/null)
   up=$(git --no-optional-locks -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) && up="+$up unpushed" || up="no upstream"
-  applied=$(hv owner-notes-applied "$plan")
-  applied=${applied:-0}
-  notes=$(grep -c '^- ' "$rel/owner.md" 2>/dev/null)
-  notes=${notes:-0}
+  applied=$(num "$(hv owner-notes-applied "$plan")")
+  notes=$(num "$(grep -c '^- ' "$rel/owner.md" 2>/dev/null)")
   info=(
     "item ${item:-none}"
     "${done}✓ ${blk}✗ ${open}○  ·  s${n:-0}  ·  work $work/${cap:-?}  ·  wk $(pct "$weekly")/$(pct "$ceil")  ·  5h $(pct "$five")"
@@ -166,12 +168,12 @@ pane_frame() { # <cols> <lines> <focus>; uses body[] total off sub think compact
 
 board_frame() { # <board-dir> <cols> <lines>
   local f line open
-  open=$(open_requests "$1" | paste -sd'|' | sed 's/|/   /g')
+  open=$(open_requests "$1" | clean | paste -sd'|' | sed 's/|/   /g')
   {
     printf '\033[1;7m BOARD %s \033[0m  open: \033[33m%s\033[0m\n' "$(basename "$(dirname "$1")")" "${open:-none}"
     for f in "$1"/*.md; do
       [ -f "$f" ] || continue
-      line=$(grep '^- ' "$f" | tail -1 | cut -c3- | tr '\t' ' ')
+      line=$(grep '^- ' "$f" | tail -1 | cut -c3- | tr '\t' ' ' | clean)
       printf '\033[1m%-11s\033[0m \033[2m%s\033[0m\n' "$(basename "$f" .md)" "$line"
     done
   } | fit "$2" "$3"
