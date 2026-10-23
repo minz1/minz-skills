@@ -42,9 +42,10 @@ test_templates() {
 }
 
 test_review_rules() {
-  in_skill 'Run push, tag and deploy commands bare, one per call' "\`owner → <repo>: <text>\`" "Sessions never write \`owner\` lines" \
+  in_skill "\`owner → <repo>: <text>\`" "Sessions never write \`owner\` lines" \
     'explicitly changes an earlier decision is applied' 'skips the "Item states and shipping" and "Board" sections' "\`[to <peer>]\`" \
-    "whose \`after:\` items are \`[c]\`, \`[p]\` or \`[x]\`" 'A post still waiting for its ack'
+    "whose \`after:\` items are \`[c]\`, \`[p]\` or \`[x]\`, while fewer than \`ahead-cap\`" 'A ship post still waiting for its ack (not in a legacy plan)' \
+    'On an ack of your own ship post (not in a legacy plan)' "set its items back to \`[ ]\`" 'owner-board-applied:' 'exactly as the repo'"'"'s allow rules spell them'
   grep -qF "no \`[c]\` or \`[p]\` items left" "$PLAN" || die "Final template lacks the [c]/[p] rule"
 }
 
