@@ -9,6 +9,7 @@ cd "$repo" || exit 1
 
 child=
 wd=
+pre_owner=
 woke=
 board_streak=0
 pre_blocked=
@@ -36,6 +37,18 @@ blocked_key() { [[ $1 =~ ^-\ \[(!!?)\]\ *([0-9]+) ]] && echo "${BASH_REMATCH[2]}
 alive() { { kill -0 "$1" || [ -d "/proc/$1" ]; } 2>/dev/null; }
 
 clean() { tr -d '\000-\010\013-\037\177'; }
+
+owner_lines() { awk '/^## Owner/{h=1; next} /^## /{h=0} h && /^- /' "$run/plan.md" 2>/dev/null; }
+
+notify_owner() {
+  local l
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    grep -qxF -- "$l" <<<"$pre_owner" && continue
+    notify owner "${l:0:200}"
+    return
+  done < <(owner_lines)
+}
 
 notify_blocked() {
   local l
@@ -131,6 +144,9 @@ read_header() {
   [[ $ceiling =~ ^[0-9]*\.?[0-9]+$ ]] || bad='weekly-ceiling'
   [[ $cap =~ ^[0-9]+$ ]] || bad='session-cap'
   [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
+  local gc
+  gc=$(head -1 "$HOME/.config/autopilot/weekly-ceiling" 2>/dev/null)
+  if [[ $gc =~ ^[0-9]*\.?[0-9]+$ ]] && awk -v a="$gc" -v b="$ceiling" 'BEGIN { exit !(a + 0 < b + 0) }'; then ceiling=$gc; fi
   board_dir=$(header_value board)
   case $board_dir in none | '') board_dir= ;; \~/*) board_dir=$HOME/${board_dir#\~/} ;; esac
   board_dir=${board_dir%/}
@@ -286,6 +302,7 @@ while :; do
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
   stream=$run/sessions/$n.jsonl
   snapshot
+  pre_owner=$(owner_lines)
   pre_blocked=$(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null | while IFS= read -r l; do blocked_key "$l"; done)
   CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
   child=$!
@@ -317,6 +334,7 @@ while :; do
   fi
   running=
   notify_blocked
+  notify_owner
   log "session=$n end exit=$kind detail=\"${detail//\"/\'}\" weekly=${weekly:-?} five_hour=${five:-?} peak_ctx=${peak:-0}"
   printf '%s\n' "$text"
 

@@ -372,6 +372,27 @@ test_stray_file_and_empty_note() {
   has "$(cat "$R2/owner.md")" "--now x" owner.md
 }
 
+test_status_new_states() {
+  setup; printf '%s\n' '- [x] 1. a' '- [x] 2. b' '- [c] 3. c' '- [p] 4. d' '- [ ] 5. e' >> "$R2/plan.md"
+  ap status; has "$OUT" "2 done, 1 committed, 1 pushed, 0 blocked, 1 open" status
+}
+test_status_owner_section() {
+  setup; printf '%s\n' '## Owner' '- o1' '- o2' '- o3' '- o4' '## Handoff' 'h' >> "$R2/plan.md"
+  ap status; has "$OUT" "owner: 4" status; has "$OUT" "  - o3" status; lacks "$OUT" "  - o4" status
+}
+test_note_once() { setup; ap note --once "skip it"; grep -qE '^- [0-9T:-]+Z \[once\] skip it$' "$R2/owner.md" || die "$(cat "$R2/owner.md")"; }
+test_note_to_peer() {
+  setup; mkdir -p "$HOME/.autopilot/b"; echo 'board: ~/.autopilot/b/' >> "$R2/plan.md"
+  ap note --to nixfiles "hold deploys"
+  eq "$RC" 0 rc; grep -qE '^- [0-9T:-]+Z owner → nixfiles: hold deploys$' "$HOME/.autopilot/b/repo.md" || die "board: $(cat "$HOME/.autopilot/b/repo.md")"
+  has "$(cat "$R2/owner.md")" "hold deploys" owner.md
+}
+test_note_to_without_board() { setup; ap note --to x "hi"; [ "$RC" != 0 ] || die "rc 0"; has "$ERR" "no board for this run" stderr; }
+test_note_warns_done_item() {
+  setup; echo '- [x] 3. thing' >> "$R2/plan.md"; ap note "item 3 should change"
+  has "$ERR" "warning: item 3 is already done" stderr; has "$(cat "$R2/owner.md")" "item 3 should change" owner.md
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -417,5 +438,11 @@ out=$(test_status_ignores_session_in_detail 2>/dev/null); t test_status_ignores_
 out=$(test_start_runner_refuses 2>/dev/null); t test_start_runner_refuses "$out" $?
 out=$(test_start_env_scrubbed 2>/dev/null); t test_start_env_scrubbed "$out" $?
 out=$(test_stray_file_and_empty_note 2>/dev/null); t test_stray_file_and_empty_note "$out" $?
+out=$(test_status_new_states 2>/dev/null); t test_status_new_states "$out" $?
+out=$(test_status_owner_section 2>/dev/null); t test_status_owner_section "$out" $?
+out=$(test_note_once 2>/dev/null); t test_note_once "$out" $?
+out=$(test_note_to_peer 2>/dev/null); t test_note_to_peer "$out" $?
+out=$(test_note_to_without_board 2>/dev/null); t test_note_to_without_board "$out" $?
+out=$(test_note_warns_done_item 2>/dev/null); t test_note_warns_done_item "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
