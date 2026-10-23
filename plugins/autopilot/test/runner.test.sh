@@ -218,6 +218,50 @@ test_limit_nap_ignores_board() {
   nap_hook "[ \$1 -eq 1 ] && echo '- p-1 → repo: x' >> '$BOARD/peer.md'; exit 0"; go
   local t; t=$(slept_total); ((t >= 590)) || die "slept $t"
 }
+ago_ts() { date -u -d "@$(( $(date +%s) - $1 ))" +%FT%TZ; }
+prior_wait() { # <seconds-ago> <detail> [extra line]
+  printf '%s session=3 start mode=continue checkpoint=x\n%s session=3 end exit=WAIT detail="%s" weekly=0.1 five_hour=0.1 peak_ctx=1\n' "$(ago_ts "$1")" "$(ago_ts "$1")" "$2" > "$LOG"
+  [ -z "${3:-}" ] || echo "$(ago_ts 30) $3" >> "$LOG"
+}
+test_resume_wait_naps_remainder() {
+  setup; prior_wait 300 20; sc 1 "$DONE"; go
+  log_has "resume wait"; local t; t=$(slept_total); ((t >= 890 && t <= 910)) || die "slept $t"
+  log_has "session=4 start"
+}
+test_resume_uses_logged_pids() {
+  setup; sleep 300 >/dev/null 2>&1 & local p=$!
+  prior_wait 60 "20 pid=$p"; sc 1 "$DONE"
+  nap_hook "[ \$1 -ge 2 ] && kill $p; exit 0"; go
+  log_has "woke reason=pid:$p after=20s"
+}
+test_resume_dead_pid_wakes() {
+  setup; true >/dev/null & local p=$!; wait $p
+  prior_wait 60 "20 pid=$p"; sc 1 "$DONE"; go
+  log_has "woke reason=pid:$p after=0s"; expect_calls 1
+}
+test_resume_expired_starts_session() {
+  setup; prior_wait 1500 20; sc 1 "$DONE"; go
+  log_lacks "resume wait"; eq "$(slept_total)" 0 "slept"; expect_calls 1
+}
+test_resume_skipped_after_woke() {
+  setup; prior_wait 120 20 "woke reason=board:x after=60s"; sc 1 "$DONE"; go
+  log_lacks "resume wait"; eq "$(slept_total)" 0 "slept"
+}
+test_resume_skipped_after_stopped() {
+  setup; prior_wait 120 20 "stopped: stop file"; sc 1 "$DONE"; go
+  log_lacks "resume wait"
+}
+test_resume_skipped_on_exec_path() {
+  setup; prior_wait 120 20
+  sc 1 "$DONE" '{"exec":"env | grep ^AUTOPILOT_ >> \"$FAKE_SCENARIO/env\"; true"}'
+  AUTOPILOT_RESUME_MODE=continue go
+  log_lacks "resume wait"; ! grep -q RESUME "$FAKE_SCENARIO/env" 2>/dev/null || die "resume env leaked"
+}
+test_resume_note_wakes_stop() {
+  setup; prior_wait 120 20; sc 1 "$DONE"
+  nap_hook '[ $1 -ge 1 ] && touch .autopilot/runs/t/STOP; exit 0'; go
+  log_has "resume wait"; log_has "woke reason=stop"; expect_calls 0; stopped "stop file"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go

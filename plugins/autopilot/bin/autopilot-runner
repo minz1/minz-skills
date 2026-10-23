@@ -12,9 +12,11 @@ board_dir=
 repo_name=$(basename "$repo")
 declare -A base_board=()
 running=
-mode='continue'
-reason=
-crashes=0
+exec_path=${AUTOPILOT_RESUME_MODE:+1}
+mode=${AUTOPILOT_RESUME_MODE:-continue}
+reason=${AUTOPILOT_RESUME_REASON:-}
+crashes=${AUTOPILOT_RESUME_CRASHES:-0}
+unset AUTOPILOT_RESUME_MODE AUTOPILOT_RESUME_REASON AUTOPILOT_RESUME_CRASHES
 launched=0
 idx=$(mktemp -u)
 
@@ -156,8 +158,23 @@ parse_word() {
   esac
 }
 
+resume_wait() {
+  local endl m dl now
+  endl=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$run/runner.log" 2>/dev/null | tail -1)
+  [[ $endl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?\" ]] || return 0
+  m=${BASH_REMATCH[1]} wait_pids=${BASH_REMATCH[3]//,/ }
+  awk '/ session=[0-9]+ end /{after=""; next} {after = after $0 "\n"} END {printf "%s", after}' "$run/runner.log" |
+    grep -qE '^[^ ]+ (woke |stopped:)' && return 0
+  dl=$(($(date -u -d "${endl%% *}" +%s) + 10#$m * 60)) now=$(date +%s)
+  ((dl > now)) || return 0
+  log "resume wait $((dl - now))s"
+  snapshot
+  nap $((dl - now)) full
+}
+
 mkdir -p "$HOME/.autopilot" "$run/sessions"
 read_header || { echo "autopilot-runner: $bad" >&2; exit 2; }
+[ -n "$exec_path" ] || resume_wait
 
 while :; do
   [ ! -e "$run/STOP" ] || stop "stop file"
