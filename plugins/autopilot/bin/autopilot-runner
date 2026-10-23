@@ -8,6 +8,8 @@ for v in $(compgen -e | grep '^CLAUDE' | grep -vx CLAUDE_BIN); do unset "$v"; do
 cd "$repo" || exit 1
 
 child=
+wd=
+pre_blocked=
 board_dir=
 repo_name=$(basename "$repo")
 declare -A base_board=()
@@ -20,10 +22,58 @@ unset AUTOPILOT_RESUME_MODE AUTOPILOT_RESUME_REASON AUTOPILOT_RESUME_CRASHES
 idx=$(mktemp -u)
 
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$run/runner.log"; }
+notify() {
+  local h=$HOME/.config/autopilot/notify
+  [ -x "$h" ] || return 0
+  setsid timeout 60 "$h" "$repo_name" "$(basename "$run")" "$1" "$2" </dev/null >/dev/null 2>&1 &
+}
+
+blocked_key() { [[ $1 =~ ^-\ \[(!!?)\]\ *([0-9]+) ]] && echo "${BASH_REMATCH[2]}${BASH_REMATCH[1]}" || echo "$1"; }
+
+blocked_keys() {
+  local l
+  while IFS= read -r l; do blocked_key "$l"; done < <(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null)
+}
+
+notify_blocked() {
+  local l
+  while IFS= read -r l; do
+    grep -qxF -- "$(blocked_key "$l")" <<<"$pre_blocked" && continue
+    notify blocked "${l:0:200}"
+    return
+  done < <(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null)
+}
+
+watchdog() {
+  local every=${AUTOPILOT_STALL_EVERY:-60} after=${AUTOPILOT_STALL_AFTER:-3900} fired= m now sp=
+  trap 'kill $sp 2>/dev/null; exit 0' TERM
+  while :; do
+    sleep "$every" &
+    sp=$!
+    wait "$sp"
+    m=$(stat -c %Y "$1" 2>/dev/null) || continue
+    now=$(date +%s)
+    if ((now - m >= after)); then
+      [ -n "$fired" ] || notify stalled "session $2 silent $(((now - m) / 60))m"
+      fired=1
+    else
+      fired=
+    fi
+  done
+}
+
+stop_watchdog() {
+  [ -n "$wd" ] || return 0
+  kill "$wd" 2>/dev/null
+  wait "$wd" 2>/dev/null
+  wd=
+}
+
 stop() {
   log "stopped: $1"
   echo "stopped: $1" >> "$run/log.md"
   [ -z "$board_dir" ] || echo "- $repo_name: runner stopped $(date -u +%FT%TZ): $1" >> "$board_dir/$repo_name.md"
+  notify stopped "$1"
   exit 0
 }
 
@@ -37,6 +87,7 @@ on_kill() {
     kill -- -"$child" 2>/dev/null
     wait "$child" 2>/dev/null
   fi
+  stop_watchdog
   rm -f "$idx" "$idx.lock"
   exit 130
 }
@@ -197,11 +248,15 @@ while :; do
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
   stream=$run/sessions/$n.jsonl
   snapshot
+  pre_blocked=$(blocked_keys)
   CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
   child=$!
+  watchdog "$stream" "$n" </dev/null >/dev/null 2>&1 &
+  wd=$!
   wait "$child"
   rc=$?
   child=
+  stop_watchdog
 
   read -r ltype lreset weekly five peak <<< "$(jq -rs '
     [.[] | select(.type == "rate_limit_event") | .rate_limit_info] as $r
@@ -222,6 +277,7 @@ while :; do
     parse_word
   fi
   running=
+  notify_blocked
   log "session=$n end exit=$kind detail=\"${detail//\"/\'}\" weekly=${weekly:-?} five_hour=${five:-?} peak_ctx=${peak:-0}"
   printf '%s\n' "$text"
 

@@ -279,6 +279,58 @@ test_stop_no_board_no_file() {
   setup; sc 1 "$DONE"; go
   [ ! -e "$HOME/.autopilot/t" ] || die "board dir created"
 }
+hook() {
+  mkdir -p "$HOME/.config/autopilot"
+  printf '#!/bin/sh\n%s\necho "$*" >> "%s/notified"\n' "${1:-}" "$W" > "$HOME/.config/autopilot/notify"
+  chmod +x "$HOME/.config/autopilot/notify"
+}
+notified() { cat "$W/notified" 2>/dev/null; }
+test_notify_stopped() {
+  setup; hook; sc 1 "$DONE"; go
+  waitfor "$W/notified" "repo t stopped done"
+}
+test_notify_blocked_new_only() {
+  setup; hook; printf -- '- [!] 2. x\n- [ ] 3. y\n' >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^- \\[ \\] 3\\./- [!] 3./\" .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  waitfor "$W/notified" "stopped done"
+  eq "$(grep -c ' blocked ' "$W/notified")" 1 "blocked lines"; grep -q 'blocked - \[!\] 3. y' "$W/notified" || die "$(notified)"
+}
+test_notify_blocked_revisit() {
+  setup; hook; printf -- '- [!] 2. x\n' >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^- \\[!\\] 2\\. x/- [!!] 2. x revisit failed/\" .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  waitfor "$W/notified" "stopped done"; grep -q 'blocked - \[!!\] 2. x revisit failed' "$W/notified" || die "$(notified)"
+}
+test_notify_blocked_detail_capped() {
+  setup; hook; local long; long=$(printf 'y%.0s' $(seq 300))
+  printf -- '- [ ] 3. %s\n' "$long" >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^- \\[ \\] 3\\./- [!] 3./\" .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  waitfor "$W/notified" "stopped done"
+  local l; l=$(grep ' blocked ' "$W/notified"); l=${l#repo t blocked }; eq "${#l}" 200 "detail length"
+}
+test_notify_missing_hook_ok() { setup; sc 1 "$DONE"; go; stopped done; }
+test_notify_non_executable_skipped() {
+  setup; hook; chmod -x "$HOME/.config/autopilot/notify"; sc 1 "$DONE"; go; sleep 0.3
+  [ ! -e "$W/notified" ] || die "ran"
+}
+test_notify_failing_hook_ok() { setup; hook 'exit 1'; sc 1 "$DONE"; go; stopped done; }
+test_notify_hanging_hook_ok() {
+  setup; hook 'sleep 100'; sc 1 "$NEXT"; sc 2 "$DONE"; local t0=$SECONDS; go
+  ((SECONDS - t0 < 5)) || die "slow"; stopped done
+}
+test_stall_alert() {
+  setup; hook; export AUTOPILOT_STALL_EVERY=1 AUTOPILOT_STALL_AFTER=1
+  sc 1 "$DONE" '{"sleep":3}'; go
+  waitfor "$W/notified" "stopped done"
+  eq "$(grep -c 'repo t stalled session 1 silent' "$W/notified")" 1 "stalled lines"
+  ! grep -qv '^slept 10$' "$W/slept" 2>/dev/null || die "watchdog used SLEEP_CMD"
+  ! pgrep -f "$W/repo" >/dev/null || die "watchdog left running"
+}
+test_stall_rearms() {
+  setup; hook; export AUTOPILOT_STALL_EVERY=1 AUTOPILOT_STALL_AFTER=2
+  sc 1 "$DONE" '{"sleep":8,"exec":"( sleep 4; echo \"{}\" ) &"}'; go
+  waitfor "$W/notified" "stopped done"
+  eq "$(grep -c 'stalled session 1' "$W/notified")" 2 "stalled lines"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go
