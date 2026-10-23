@@ -7,13 +7,13 @@ description: Use for /autopilot, "autopilot plan", "start an autonomous run" or 
 
 Arguments: $ARGUMENTS
 
-Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop` and do nothing more.
+Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`, `watch`, `dash`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop|watch|dash` and do nothing more.
 
 Templates are in `${CLAUDE_PLUGIN_ROOT}/skills/autopilot/templates/` (`plan.md`, `rules.md`).
 
-## start, status, note, stop
+## start, status, note, stop, watch, dash
 
-Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged.
+Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged. `dash` and `watch` are interactive terminal panes: for `dash`, run it with `TMUX=x` in front so it builds the grid without attaching, then tell the owner to run `tmux -L autopilot-dash attach` in a terminal; for `watch`, give the owner the command `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" watch` (with the path expanded) to run in a terminal from the repo.
 
 ## plan
 
@@ -40,7 +40,10 @@ Run 2026-10-21 in batmanROTJ is ready (open scope, 4 items, ceiling 80%).
   /autopilot stop --now        stop immediately (the next start recovers)
   /autopilot plan              revise the plan (before starting, or after a stop)
 
-  From a terminal: tmux attach -t '=autopilot-batmanROTJ'        watch
+  /autopilot dash              every live run in one tmux grid, with the board
+
+  From a terminal: tmux -L autopilot-dash attach                 the dash grid
+                   tmux attach -t '=autopilot-batmanROTJ'        the raw runner
                    tmux kill-session -t '=autopilot-batmanROTJ'  emergency stop
 ```
 

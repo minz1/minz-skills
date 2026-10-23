@@ -186,7 +186,7 @@ addressed() {
     fi
     [[ $l =~ ^-\ ([0-9T:-]+Z\ )?done\ [A-Za-z0-9_.-]+ ]] && return 0
   done <<<"$1"
-  grep -oE '(^|[^A-Za-z])(ack|nack|reject) [A-Za-z0-9_.-]+-[0-9]+' <<<"$1" | sed -E 's/.* //; s/-[0-9]+$//' | grep -qxF -- "$repo_name"
+  grep -oE '^- ([0-9T:-]+Z )?((ack|nack|reject) )+[A-Za-z0-9_.-]+-[0-9]+' <<<"$1" | sed -E 's/.* //; s/-[0-9]+$//' | grep -qxF -- "$repo_name"
 }
 
 wake_check() {

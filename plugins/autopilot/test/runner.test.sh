@@ -185,6 +185,11 @@ test_board_wake_reject_and_done() {
   nap_hook "[ \$1 -eq 1 ] && echo '- done peer' >> '$BOARD/peer.md'; exit 0"; go
   log_has "woke reason=board:peer.md"
 }
+test_board_mention_is_not_an_answer() {
+  setup; board_setup; board_wait 1
+  nap_hook "[ \$1 -eq 1 ] && echo '- peer: still waiting on ack repo-3' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=timeout"
+}
 test_board_own_file_ignored() {
   setup; board_setup; board_wait 1
   nap_hook "[ \$1 -eq 1 ] && echo '- ack repo-1 → repo: x' >> '$BOARD/repo.md'; exit 0"; go
@@ -753,6 +758,7 @@ out=$(test_board_no_wake_other_repo 2>/dev/null); t test_board_no_wake_other_rep
 out=$(test_board_wake_whole_name 2>/dev/null); t test_board_wake_whole_name "$out" $?
 out=$(test_board_wake_multi_recipient 2>/dev/null); t test_board_wake_multi_recipient "$out" $?
 out=$(test_board_wake_reject_and_done 2>/dev/null); t test_board_wake_reject_and_done "$out" $?
+out=$(test_board_mention_is_not_an_answer 2>/dev/null); t test_board_mention_is_not_an_answer "$out" $?
 out=$(test_board_own_file_ignored 2>/dev/null); t test_board_own_file_ignored "$out" $?
 out=$(test_board_shrunk_file_resets 2>/dev/null); t test_board_shrunk_file_resets "$out" $?
 out=$(test_board_partial_line 2>/dev/null); t test_board_partial_line "$out" $?
