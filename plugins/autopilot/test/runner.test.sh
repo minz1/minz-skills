@@ -31,6 +31,8 @@ setup() {
   cat > "$W/record-sleep" <<SH
 #!/bin/sh
 echo "slept \$1" >> "$W/slept"
+[ -x "$W/on-sleep" ] && "$W/on-sleep" "\$(wc -l < "$W/slept")"
+exit 0
 SH
   chmod +x "$W/record-sleep"
 }
@@ -60,6 +62,10 @@ stopped() {
   eq "$(tail -1 "$PLAN")" "stopped: $1" "plan.md last line"
 }
 slept() { cat "$W/slept" 2>/dev/null; }
+slept_total() { awk '{s += $2} END {print s + 0}' "$W/slept" 2>/dev/null || echo 0; }
+all_steps_10() { ! grep -qv '^slept 10$' "$W/slept" 2>/dev/null || die "non-10 step: $(sort -u "$W/slept")"; }
+nap_hook() { printf '#!/usr/bin/env bash\ncd "%s" || exit 1\n%s\n' "$repo" "$1" > "$W/on-sleep"; chmod +x "$W/on-sleep"; }
+near() { (( $1 >= $2 - 10 && $1 <= $2 + 10 )) || die "$3: got $1 want ~$2"; }
 gone() {
   for _ in $(seq 20); do
     kill -0 "$1" 2>/dev/null || return 0
@@ -89,7 +95,63 @@ test_next_relaunches() {
 }
 test_wait_sleeps_minutes() {
   setup; sc 1 "AUTOPILOT: WAIT 20"; sc 2 "$DONE"; go
-  eq "$(slept)" "slept 1200" "slept"; log_has 'exit=WAIT detail="20"'
+  eq "$(slept_total)" 1200 "slept"; all_steps_10; log_has 'exit=WAIT detail="20"'
+  log_has 'woke reason=timeout after=1200s'
+}
+test_wait_pid_exits_early() {
+  setup; sleep 300 >/dev/null 2>&1 & local p=$!
+  sc 1 "AUTOPILOT: WAIT 20 pid=$p"; sc 2 "$DONE"
+  nap_hook "[ \$1 -ge 3 ] && kill $p; exit 0"; go
+  log_has "woke reason=pid:$p"; eq "$(slept_total)" 30 "slept"; log_has "detail=\"20 pid=$p\""
+}
+test_wait_pid_outlives_deadline() {
+  setup; sleep 300 >/dev/null 2>&1 & local p=$!
+  sc 1 "AUTOPILOT: WAIT 1 pid=$p"; sc 2 "$DONE"; go; kill $p
+  log_has "woke reason=timeout after=60s"; eq "$(slept_total)" 60 "slept"
+}
+test_wait_pid_gone_at_parse() {
+  setup; true >/dev/null & local p=$!; wait $p
+  sc 1 "AUTOPILOT: WAIT 1 pid=$p"; sc 2 "$DONE"; go
+  log_has "pid $p not found at wait start"; log_has "woke reason=timeout"; log_has 'detail="1"'
+}
+test_wait_pids_some_gone() {
+  setup; sleep 300 >/dev/null 2>&1 & local a=$!; true >/dev/null & local b=$!; wait $b
+  sc 1 "AUTOPILOT: WAIT 1 pid=$b,$a"; sc 2 "$DONE"; go; kill $a
+  log_has "detail=\"1 pid=$a\""
+}
+test_wait_malformed_pids_plain() {
+  setup; sc 1 "AUTOPILOT: WAIT 1 pid=12x"; sc 2 "$DONE"; go
+  eq "$(exits)" "WAIT DONE" "exits"; log_has 'malformed'; eq "$(slept_total)" 60 "slept"
+}
+test_wait_wakes_on_note() {
+  setup; sc 1 "AUTOPILOT: WAIT 20"; sc 2 "$DONE"
+  nap_hook 'echo "- n" >> .autopilot/runs/t/owner.md'; go
+  log_has "woke reason=note"; eq "$(slept_total)" 10 "slept"
+}
+test_note_during_session_wakes_first_step() {
+  setup; echo "- old" > "$RUN/owner.md"
+  sc 1 "AUTOPILOT: WAIT 20" '{"exec":"echo \"- new\" >> .autopilot/runs/t/owner.md"}'; sc 2 "$DONE"; go
+  log_has "woke reason=note after=0s"; eq "$(slept_total)" 0 "slept"
+}
+test_old_note_does_not_wake() {
+  setup; echo "- old" > "$RUN/owner.md"; sc 1 "AUTOPILOT: WAIT 1"; sc 2 "$DONE"; go
+  log_has "woke reason=timeout"
+}
+test_wait_stop_file_wakes_and_stops() {
+  setup; sc 1 "AUTOPILOT: WAIT 20"; sc 2 "$DONE"
+  nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go
+  log_has "woke reason=stop after=20s"; expect_calls 1; stopped "stop file"
+}
+test_limit_nap_ignores_note_and_pid() {
+  setup; sleep 300 >/dev/null 2>&1 & local p=$!
+  sc 1 "AUTOPILOT: WAIT 1 pid=$p" "$(lim five_hour 600)"; sc 2 "$DONE"
+  nap_hook 'echo "- n" >> .autopilot/runs/t/owner.md'; go; kill $p
+  local t; t=$(slept_total); ((t >= 590)) || die "slept $t"; log_has "woke reason=timeout"
+}
+test_limit_nap_wakes_on_stop() {
+  setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
+  nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go
+  log_has "woke reason=stop"; stopped "stop file"
 }
 test_wait_bad_minutes_is_crash() {
   setup; sc 1 "AUTOPILOT: WAIT soon"; sc 2 "$DONE"; go
@@ -182,19 +244,17 @@ test_header_reread_each_loop() {
 }
 test_rejected_five_hour_sleeps() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 garbage; sc 3 "$DONE"; go
-  local s; s=$(slept); s=${s#slept }
-  ((s >= 595 && s <= 600)) || die "slept '$s'"
+  near "$(slept_total)" 600 slept; all_steps_10
   eq "$(exits)" "limit crash DONE" "exits"
 }
 test_rejected_past_reset_min_sleep() {
   setup; sc 1 "" "$(lim five_hour -10)"; sc 2 "$DONE"; go
-  eq "$(slept)" "slept 60" "slept"
+  eq "$(slept_total)" 60 "slept"; all_steps_10
 }
 test_limit_beats_exit_word() {
   setup; sc 1 "$NEXT" "$(lim five_hour 600)"; sc 2 "$DONE"; go
   eq "$(exits)" "limit DONE" "exits"
-  local s; s=$(slept); s=${s#slept }
-  ((s >= 595 && s <= 600)) || die "slept '$s'"
+  near "$(slept_total)" 600 slept
 }
 test_rejected_weekly_stops() {
   setup; sc 1 "" "$(lim seven_day_opus 600)"; go
@@ -231,7 +291,7 @@ test_wrapup_crash_retries_wrapup() {
 }
 test_wrapup_limited_five_hour_retries() {
   setup; sc 1 "$NEXT" "$W81"; sc 2 "" "$(lim five_hour 60)"; sc 3 "$DONE"; go
-  expect_calls 3; call_has 2 wrapup; call_has 3 wrapup; eq "$(slept)" "slept 60" "slept"
+  expect_calls 3; call_has 2 wrapup; call_has 3 wrapup; eq "$(slept_total)" 60 "slept"
 }
 test_rejected_with_overage_ignored() {
   setup; sc 1 "$NEXT" "$(lim five_hour 600 true)"; sc 2 "$DONE"; go
@@ -352,56 +412,5 @@ fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
 }
-out=$(test_next_relaunches 2>/dev/null); t test_next_relaunches "$out" $?
-out=$(test_wait_sleeps_minutes 2>/dev/null); t test_wait_sleeps_minutes "$out" $?
-out=$(test_wait_bad_minutes_is_crash 2>/dev/null); t test_wait_bad_minutes_is_crash "$out" $?
-out=$(test_done_exits 2>/dev/null); t test_done_exits "$out" $?
-out=$(test_stop_exits 2>/dev/null); t test_stop_exits "$out" $?
-out=$(test_wait_zero_is_crash 2>/dev/null); t test_wait_zero_is_crash "$out" $?
-out=$(test_multiline_final_text 2>/dev/null); t test_multiline_final_text "$out" $?
-out=$(test_trailing_plugin_text 2>/dev/null); t test_trailing_plugin_text "$out" $?
-out=$(test_last_marker_wins 2>/dev/null); t test_last_marker_wins "$out" $?
-out=$(test_bare_word_is_crash 2>/dev/null); t test_bare_word_is_crash "$out" $?
-out=$(test_trailing_space_ok 2>/dev/null); t test_trailing_space_ok "$out" $?
-out=$(test_garbled_word_is_crash 2>/dev/null); t test_garbled_word_is_crash "$out" $?
-out=$(test_one_crash_retries 2>/dev/null); t test_one_crash_retries "$out" $?
-out=$(test_two_crashes_stop 2>/dev/null); t test_two_crashes_stop "$out" $?
-out=$(test_valid_word_nonzero_rc_is_crash 2>/dev/null); t test_valid_word_nonzero_rc_is_crash "$out" $?
-out=$(test_crash_counter_resets 2>/dev/null); t test_crash_counter_resets "$out" $?
-out=$(test_ceiling_runs_wrapup_then_stops 2>/dev/null); t test_ceiling_runs_wrapup_then_stops "$out" $?
-out=$(test_done_beats_ceiling 2>/dev/null); t test_done_beats_ceiling "$out" $?
-out=$(test_stop_beats_ceiling 2>/dev/null); t test_stop_beats_ceiling "$out" $?
-out=$(test_session_cap_runs_wrapup 2>/dev/null); t test_session_cap_runs_wrapup "$out" $?
-out=$(test_cap_counts_per_start 2>/dev/null); t test_cap_counts_per_start "$out" $?
-out=$(test_header_reread_each_loop 2>/dev/null); t test_header_reread_each_loop "$out" $?
-out=$(test_rejected_five_hour_sleeps 2>/dev/null); t test_rejected_five_hour_sleeps "$out" $?
-out=$(test_rejected_past_reset_min_sleep 2>/dev/null); t test_rejected_past_reset_min_sleep "$out" $?
-out=$(test_limit_beats_exit_word 2>/dev/null); t test_limit_beats_exit_word "$out" $?
-out=$(test_rejected_weekly_stops 2>/dev/null); t test_rejected_weekly_stops "$out" $?
-out=$(test_unknown_limit_type_stops 2>/dev/null); t test_unknown_limit_type_stops "$out" $?
-out=$(test_wrapup_next_still_stops 2>/dev/null); t test_wrapup_next_still_stops "$out" $?
-out=$(test_killed_while_sleeping 2>/dev/null); t test_killed_while_sleeping "$out" $?
-out=$(test_wrapup_crash_retries_wrapup 2>/dev/null); t test_wrapup_crash_retries_wrapup "$out" $?
-out=$(test_wrapup_limited_five_hour_retries 2>/dev/null); t test_wrapup_limited_five_hour_retries "$out" $?
-out=$(test_rejected_with_overage_ignored 2>/dev/null); t test_rejected_with_overage_ignored "$out" $?
-out=$(test_missing_rate_limit_event 2>/dev/null); t test_missing_rate_limit_event "$out" $?
-out=$(test_missing_header_refuses 2>/dev/null); t test_missing_header_refuses "$out" $?
-out=$(test_stop_file_before_start 2>/dev/null); t test_stop_file_before_start "$out" $?
-out=$(test_stop_file_between_sessions 2>/dev/null); t test_stop_file_between_sessions "$out" $?
-out=$(test_start_and_end_lines 2>/dev/null); t test_start_and_end_lines "$out" $?
-out=$(test_checkpoint_refs 2>/dev/null); t test_checkpoint_refs "$out" $?
-out=$(test_checkpoint_no_identity 2>/dev/null); t test_checkpoint_no_identity "$out" $?
-out=$(test_checkpoint_author 2>/dev/null); t test_checkpoint_author "$out" $?
-out=$(test_checkpoint_failure 2>/dev/null); t test_checkpoint_failure "$out" $?
-out=$(test_header_broken_mid_run 2>/dev/null); t test_header_broken_mid_run "$out" $?
-out=$(test_invalid_cap_refused 2>/dev/null); t test_invalid_cap_refused "$out" $?
-out=$(test_stop_reason_with_quotes 2>/dev/null); t test_stop_reason_with_quotes "$out" $?
-out=$(test_checkpoint_skips_ignored 2>/dev/null); t test_checkpoint_skips_ignored "$out" $?
-out=$(test_peak_ctx_logged 2>/dev/null); t test_peak_ctx_logged "$out" $?
-out=$(test_peak_ctx_ignores_subagents 2>/dev/null); t test_peak_ctx_ignores_subagents "$out" $?
-out=$(test_template_plan_starts 2>/dev/null); t test_template_plan_starts "$out" $?
-out=$(test_flags 2>/dev/null); t test_flags "$out" $?
-out=$(test_claude_env_scrubbed 2>/dev/null); t test_claude_env_scrubbed "$out" $?
-out=$(test_stream_saved 2>/dev/null); t test_stream_saved "$out" $?
-out=$(test_killed_logs_end 2>/dev/null); t test_killed_logs_end "$out" $?
+for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do out=$($f 2>/dev/null); t "$f" "$out" $?; done
 exit $fail

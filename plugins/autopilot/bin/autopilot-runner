@@ -48,11 +48,36 @@ read_header() {
   [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
 }
 
-nap() {
+step() {
   setsid "$SLEEP_CMD" "$1" &
   child=$!
   wait "$child"
   child=
+}
+
+count_notes() { local c; c=$(grep -c '^- ' "$run/owner.md" 2>/dev/null); echo "${c:-0}"; }
+
+snapshot() { base_notes=$(count_notes); }
+
+wake_check() {
+  local p
+  [ "$(count_notes)" -le "${base_notes:-0}" ] || { echo note; return; }
+  for p in $wait_pids; do kill -0 "$p" 2>/dev/null || { echo "pid:$p"; return; }; done
+}
+
+nap() {
+  local total=$1 mode=$2 el=0 r= s
+  while :; do
+    if [ -e "$run/STOP" ]; then r=stop
+    elif [ "$mode" = full ]; then r=$(wake_check)
+    fi
+    [ -z "$r" ] || break
+    ((el < total)) || { r=timeout; break; }
+    s=$((total - el < 10 ? total - el : 10))
+    step "$s"
+    el=$((el + s))
+  done
+  log "woke reason=$r after=${el}s"
 }
 
 checkpoint() {
@@ -64,7 +89,8 @@ checkpoint() {
 }
 
 parse_word() {
-  local m
+  local m rest p
+  wait_pids=
   kind=crash detail=
   [ "$rc" -eq 0 ] || return
   case $word in
@@ -72,7 +98,20 @@ parse_word() {
     STOP\ *) kind=STOP detail=${word#STOP } ;;
     WAIT\ *)
       m=${word#WAIT }
-      if [[ $m =~ ^[0-9]+$ ]] && ((10#$m > 0)); then kind=WAIT detail=$((10#$m)); fi
+      [[ $m =~ ^([0-9]+)(\ +(.*))?$ ]] || return
+      m=${BASH_REMATCH[1]} rest=${BASH_REMATCH[3]}
+      ((10#$m > 0)) || return
+      kind=WAIT detail=$((10#$m))
+      [ -n "$rest" ] || return
+      if [[ $rest =~ ^pid=([0-9]+(,[0-9]+)*)$ ]]; then
+        for p in ${BASH_REMATCH[1]//,/ }; do
+          if kill -0 "$p" 2>/dev/null; then wait_pids+=" $p"; else log "pid $p not found at wait start"; fi
+        done
+        wait_pids=${wait_pids# }
+        [ -z "$wait_pids" ] || detail+=" pid=${wait_pids// /,}"
+      else
+        log "malformed pid list \"${rest//\"/\'}\", plain WAIT"
+      fi
       ;;
   esac
 }
@@ -94,6 +133,7 @@ while :; do
   args=(-p "/autopilot:autopilot $mode $run" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose)
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
   stream=$run/sessions/$n.jsonl
+  snapshot
   CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
   child=$!
   wait "$child"
@@ -127,7 +167,8 @@ while :; do
       [ "$detail" = five_hour ] || stop "limit $detail reached"
       wait_s=$((lreset - $(date +%s)))
       [ "$wait_s" -ge 60 ] || wait_s=60
-      nap "$wait_s"
+      nap "$wait_s" limit
+      [ ! -e "$run/STOP" ] || stop "stop file"
       continue
       ;;
     DONE) stop "${reason:-done}" ;;
@@ -146,5 +187,5 @@ while :; do
   elif [ "$launched" -ge "$cap" ]; then
     reason="session cap $cap" mode=wrapup
   fi
-  [ "$kind" != WAIT ] || nap $((detail * 60))
+  [ "$kind" != WAIT ] || nap $((${detail%% *} * 60)) full
 done
