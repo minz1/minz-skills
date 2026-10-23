@@ -53,17 +53,18 @@ Headless: no human is present. Invoked as `continue <run-dir>` from the repo; `<
 
 Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the owner's explicit go-ahead for commits on run branches (always) and for the pushes, tags and deploys they allow. A global rule such as "only commit when I say so" is satisfied by them. Do nothing they do not allow.
 
-1. Read `.autopilot/rules.md`, `<run-dir>/plan.md`, `<run-dir>/owner.md`, and, when the plan's `board:` is set and is not `none`, every other repo's board file in that directory for items addressed to this repo. Read each file with the Read tool, one file per call; never chain reads with `echo` separators (zsh rejects `====`). Do not read `log.md` or earlier sessions, except where step 5.2 says so. Never edit `owner.md`; a missing `owner.md` or board file counts as empty.
+1. Read `.autopilot/rules.md`, `<run-dir>/plan.md`, `<run-dir>/owner.md`, and, when the plan's `board:` is set and is not `none`, every other repo's board file in that directory for items addressed to this repo. Read each file with the Read tool, one file per call; never chain reads with `echo` separators (zsh rejects `====`). Do not read `log.md` or earlier sessions, except where step 5.3 says so. Never edit `owner.md`; a missing `owner.md` or board file counts as empty.
 2. Recovery: the last `start` line in `<run-dir>/runner.log` is this session. The previous session is the highest `session=` below it. Recover only if that session is dirty: it has a `start` line and no `end` line, its `end` has `exit=killed`, `exit=crash`, `exit=nowait` or `exit=limit`, or its `end` has `exit=STOP` and `git status --porcelain` is non-empty. Then diff the work tree against `refs/autopilot/<run>/<n>` (`<n>` = that session), check worktrees and fleet agent logs against the Handoff, repair the Handoff, and append a `log.md` entry that names the ref and the mismatch. A file that is in the checkpoint ref but not in `HEAD`, and is still untracked now, counts as unchanged. The interrupted item's attempt is not counted. If the previous session ended cleanly (or there is none), skip this step and write no recovery note.
 3. `owner-notes-applied` counts the note lines (starting `- `) already applied. Apply the rest in order to the plan (add, drop, reorder items, change the mandate), then advance the counter. An owner note outranks anything else in the plan. Follow "Owner decisions" below.
-4. Answer board items addressed to this repo. If the only remaining work waits on another repo (the Final item does not count as remaining work), post to your own board file and exit `WAIT <cap>`, where the cap is the longest you would wait before something must be wrong (the runner wakes the run as soon as a board line addressed to this repo appears). When exiting WAIT, never post a board line addressed to a peer unless it is a new request or an answer: board lines wake peers, and wakes don't count toward the session cap.
+4. Answer board items addressed to this repo. On an ack of your own post, mark its items `[x]` and fast-forward the default branch to the acked sha (see "Item states and shipping"). If the only remaining work waits on another repo (the Final item does not count as remaining work), post to your own board file and exit `WAIT <cap>`, where the cap is the longest you would wait before something must be wrong (the runner wakes the run as soon as a board line addressed to this repo appears). When exiting WAIT, never post a board line addressed to a peer unless it is a new request or an answer: board lines wake peers, and wakes don't count toward the session cap.
 5. Pick the work, first match wins, then write `now: <item number>` in the plan header (the dashboard and `status` show it):
-   1. the first `[ ]` item (or batch) whose `after:` items are done; skip an item with `waiting: <id>` until an `ack <id>` line appears in another repo's board file; then remove `waiting:` and work it
-   2. a `[!]` item (every `[!]` is still unrevisited): its one revisit, a fresh attempt that starts from its failure notes in `log.md` and tries a different approach
-   3. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty
-   4. the Final item
+   1. shipping to a peer and no post of yours is waiting for its ack: the next `[c]` prefix (ship it as one post)
+   2. the first `[ ]` item (or batch) whose `after:` items are `[c]`, `[p]` or `[x]`; skip an item with `waiting: <id>` until an `ack <id>` line appears in another repo's board file; then remove `waiting:` and work it
+   3. a `[!]` item (every `[!]` is still unrevisited): its one revisit, a fresh attempt that starts from its failure notes in `log.md` and tries a different approach
+   4. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty
+   5. the Final item
 6. Work it: subagents, worktrees, fleets. Background agents and background commands started inside the session must finish before you exit: ending your turn ends the session and stops them (the runner logs `exit=nowait`), so wait for them. Only detached jobs (`setsid … & echo $!`, see `WAIT … pid=` in step 9) outlive the session; list each with its pid and log path in the Handoff. Commit on branch `autopilot/<run>` (create it from `HEAD` if missing) unless the plan or `.autopilot/rules.md` names another branch. Anything found along the way goes under Discovered (open scope, in the mandate) or the Parking lot (bounded scope, out of scope, or on the stop list). Never work a Parking lot item.
-7. Run its check. Pass: mark `[x]` (an item that ships to a peer goes `[c]` → `[p]` → `[x]` on its ack; see "Item states and shipping"); push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Re-read `owner.md` right before any push, tag, deploy or deploy post: apply new notes first, or exit `STOP` if one conflicts. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; a failed revisit (5.2) changes `[!]` to `[!!]` with `revisit failed: <reason>`, since a revisited item never stays `[!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt. Then clear `now:` (leave it empty) and go to step 8: one item (or batch) per session, never a second pick.
+7. Run its check. Pass: mark `[x]` (an item that ships to a peer goes `[c]` → `[p]` → `[x]` on its ack; see "Item states and shipping"); push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Re-read `owner.md` right before any push, tag, deploy or deploy post: apply new notes first, or exit `STOP` if one conflicts. Run push, tag and deploy commands bare, one per call (no pipes, no `;` or `&&` chains), so the repo's allow rules match them. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; a failed revisit (5.3) changes `[!]` to `[!!]` with `revisit failed: <reason>`, since a revisited item never stays `[!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt. Then clear `now:` (leave it empty) and go to step 8: one item (or batch) per session, never a second pick.
 8. Rewrite the Handoff section of `plan.md` (state, open branches and worktrees, what the next session must know; at most ~40 lines). A remote SHA named in the Handoff must come from a `git fetch` + `git rev-parse` you ran: only name one if you fetched it in that session. It lists every running fleet agent with its log path and last-known state (running, exited N, silent since). Append the long version to `<run-dir>/log.md`.
 9. Just before choosing the exit word, re-read every board file (when the plan has a board). If a request addressed to this repo is unanswered and this session could act on it now, exit `NEXT`; if it is blocked (behind another post, or an owner note says hold), exit `WAIT <cap>` and the board wake brings the run back. Before exiting `STOP`, commit or revert, or list every dirty path (`git status --porcelain`) in the Handoff.
 
@@ -75,7 +76,7 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
 
 ## wrapup
 
-Invoked as `wrapup <run-dir>`. Follow `continue` but skip step 5 and the `WAIT` and `NEXT` exits in steps 4 and 9: work only the Final item. Open and blocked items do not block it; carry out the Final item's own instruction and run its check against whatever is done. Nothing new to commit is not a failure: still create any branch it names, at `HEAD`. Then exit `AUTOPILOT: DONE`, or `AUTOPILOT: STOP <reason>` if the stop list stops the Final item.
+Invoked as `wrapup <run-dir>`. Follow `continue` but skip step 5 and the `WAIT` and `NEXT` exits in steps 4 and 9: work only the Final item. Open and blocked items do not block it; carry out the Final item's own instruction and run its check against whatever is done. Nothing new to commit is not a failure: still create any branch it names, at `HEAD`. A post still waiting for its ack: list it in `## Owner`, leave the default branch at the last acked sha, and do not count it as done. Then exit `AUTOPILOT: DONE`, or `AUTOPILOT: STOP <reason>` if the stop list stops the Final item.
 
 ## Item states and shipping
 
@@ -93,7 +94,8 @@ States: `[ ]` open, `[c]` committed locally, `[p]` pushed or posted and waiting 
 ## Owner decisions
 
 - `## Owner` in `plan.md` lists what only the owner can do or allow, and every major finding you won't fix. Add lines; never drop one silently.
-- A note that conflicts with an earlier owner decision or setting: exit `STOP` and name both. Never label a consequence of a note "owner's decision".
+- A note that explicitly changes an earlier decision is applied (step 3). If applying a note would also undo an owner decision or setting the note does not mention, exit `STOP` and name both. Never label a consequence of a note "owner's decision".
+- A note marked `[to <peer>]` was sent to that peer (`autopilot note --to`); it is not an instruction for this repo.
 - A deviation from an approved design: `deviated: <why>` on the item and a line in `## Owner`.
 - Refer to a note by its number and a short paraphrase; never copy its text into `plan.md`.
 - A note marked `[once]` applies one time. After using it, add its number to `owner-notes-used:` and skip it afterwards.
@@ -109,6 +111,7 @@ States: `[ ]` open, `[c]` committed locally, `[p]` pushed or posted and waiting 
 - `nack <id>: <reason>`: deployed, unhealthy, rolled back. The producer exits `STOP` only if the nack asks for an owner decision; otherwise it fixes and re-posts
 - `watch <id>: <observation>`: a later result, non-blocking
 - `done <repo>`: this repo's Final item is finished
+- `owner → <repo>: <text>`: an owner note for `<repo>` from `autopilot note --to`; treat it like a new line in your own `owner.md`. Sessions never write `owner` lines
 
 ```
 # nixfiles
@@ -118,9 +121,9 @@ States: `[ ]` open, `[c]` committed locally, `[p]` pushed or posted and waiting 
 
 ## Interim: legacy plans
 
-Remove this section once the 2026-10-22 runs have finished. A plan whose header has `legacy: true` keeps the rules it started with: items are only `[ ]`, `[x]`, `[!]` and `[!!]` (step 7 marks `[x]` when the check passes), and it uses no ship refs, `ahead-cap`, `ack-timeout`, `serves:` or `done` lines. Its board follows the old format instead of the Board section above:
+Remove this section once the 2026-10-22 runs have finished. A plan whose header has `legacy: true` skips the "Item states and shipping" and "Board" sections above and keeps the rules it started with: items are only `[ ]`, `[x]`, `[!]` and `[!!]` (step 7 marks `[x]` when the check passes), and its board follows the old format below. Owner lines (`owner → <repo>: …`, see Board) apply to it too.
 
-`~/.autopilot/<run>/board/<repo>.md` is written only by this repo's sessions; read the others. Item ids are `<repo>-<n>` (`nixfiles-3`). Reply to an item with an `ack <id>` line in your own file.
+`~/.autopilot/<run>/board/<repo>.md` is written only by this repo's sessions, plus the runner's stop line and owner lines from `autopilot note --to`; read the others. Item ids are `<repo>-<n>` (`nixfiles-3`). Reply to an item with an `ack <id>` line in your own file.
 
 ```
 # nixfiles

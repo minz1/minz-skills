@@ -91,7 +91,7 @@ state_of() { # <repo> [run] -> st label stream info[]
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) .*/\1/p' <<<"$lastl")
   stream=$rel/sessions/$n.jsonl
   local ndone blk open nc np own
-  own=$(awk '/^## Owner/{h=1; next} /^## /{h=0} h && /^- /' "$plan" 2>/dev/null | wc -l)
+  own=$(gawk '/^## Owner[[:space:]]*$/{h=1; next} /^## /{h=0} h && /^- /' "$plan" 2>/dev/null | wc -l)
   nc=$(grep -c '^- \[c\]' "$plan" 2>/dev/null) np=$(grep -c '^- \[p\]' "$plan" 2>/dev/null)
   ndone=$(grep -c '^- \[x\]' "$plan" 2>/dev/null) blk=$(grep -cE '^- \[!!?\]' "$plan" 2>/dev/null) open=$(grep -c '^- \[ \]' "$plan" 2>/dev/null)
   if [[ $lastl == *" start "* ]] && ((live)); then
@@ -130,6 +130,9 @@ state_of() { # <repo> [run] -> st label stream info[]
   weekly=$(grep -oE 'weekly=[0-9.]+' <<<"$endl" | cut -d= -f2)
   five=$(grep -oE 'five_hour=[0-9.]+' <<<"$endl" | cut -d= -f2)
   ceil=$(hv weekly-ceiling "$plan")
+  local gc
+  gc=$(head -1 "$HOME/.config/autopilot/weekly-ceiling" 2>/dev/null)
+  if [[ $gc =~ ^[0-9]*\.?[0-9]+$ ]] && gawk -v a="$gc" -v b="${ceil:-1}" 'BEGIN { exit !(a + 0 < b + 0) }'; then ceil=$gc; fi
   cap=$(hv session-cap "$plan")
   ctx=$(grep -oE 'peak_ctx=[0-9]+' <<<"$endl" | cut -d= -f2)
   work=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | grep -vc ' exit=WAIT ')

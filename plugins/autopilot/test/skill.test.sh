@@ -41,6 +41,13 @@ test_templates() {
   for k in '## Long commands' '## Shared tool locks' '## Peers'; do grep -qF "$k" "$DIR/../skills/autopilot/templates/rules.md" || die "rules template lacks $k"; done
 }
 
+test_review_rules() {
+  in_skill 'Run push, tag and deploy commands bare, one per call' "\`owner → <repo>: <text>\`" "Sessions never write \`owner\` lines" \
+    'explicitly changes an earlier decision is applied' 'skips the "Item states and shipping" and "Board" sections' "\`[to <peer>]\`" \
+    "whose \`after:\` items are \`[c]\`, \`[p]\` or \`[x]\`" 'A post still waiting for its ack'
+  grep -qF "no \`[c]\` or \`[p]\` items left" "$PLAN" || die "Final template lacks the [c]/[p] rule"
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -59,5 +66,6 @@ out=$(test_owner_rules 2>/dev/null); t test_owner_rules "$out" $?
 out=$(test_planning_rules 2>/dev/null); t test_planning_rules "$out" $?
 out=$(test_interim_legacy 2>/dev/null); t test_interim_legacy "$out" $?
 out=$(test_templates 2>/dev/null); t test_templates "$out" $?
+out=$(test_review_rules 2>/dev/null); t test_review_rules "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

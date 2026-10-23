@@ -38,7 +38,7 @@ alive() { { kill -0 "$1" || [ -d "/proc/$1" ]; } 2>/dev/null; }
 
 clean() { tr -d '\000-\010\013-\037\177'; }
 
-owner_lines() { awk '/^## Owner/{h=1; next} /^## /{h=0} h && /^- /' "$run/plan.md" 2>/dev/null; }
+owner_lines() { awk '/^## Owner[[:space:]]*$/{h=1; next} /^## /{h=0} h && /^- /' "$run/plan.md" 2>/dev/null; }
 
 notify_owner() {
   local l

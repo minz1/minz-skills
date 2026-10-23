@@ -27,6 +27,12 @@ case $cmd in
   *) usage ;;
 esac
 bin=$(dirname "$(readlink -f "$0")")
+board_of() { # <plan.md>: the board dir, or nothing
+  local b
+  b=$(sed -n 's/^board:[[:space:]]*//;T;s/[[:space:]]*$//;p' "$1" 2>/dev/null | head -1)
+  case $b in none | '') return ;; \~/*) b=$HOME/${b#\~/} ;; esac
+  [ -d "$b" ] && echo "${b%/}"
+}
 
 if [ "$cmd" = dash ]; then
   T() { env -u TMUX tmux -f /dev/null -L autopilot-dash "$@"; }
@@ -44,10 +50,7 @@ if [ "$cmd" = dash ]; then
       T set -g history-limit 0 \; new-session -d -s dash -x 240 -y 60 -e "AP_WATCH=$bin/autopilot-watch" -e "AP_REPO=$r" "$pane"
     fi
     if [ -z "$board" ]; then
-      p=$(find "$r/.autopilot/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)/plan.md
-      b=$(sed -n 's/^board:[[:space:]]*//p' "$p" 2>/dev/null | head -1)
-      case $b in none | '') b= ;; \~/*) b=$HOME/${b#\~/} ;; esac
-      [ -z "$b" ] || [ ! -d "$b" ] || board=${b%/}
+      board=$(board_of "$(find "$r/.autopilot/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)/plan.md")
     fi
   done
   T select-layout -t =dash: tiled
@@ -83,13 +86,8 @@ rel=.autopilot/runs/$run_name
 [ -d "$rel" ] || fail "no run $run_name in $repo; run /autopilot plan first"
 
 live() { tmux has-session -t "$target" 2>/dev/null; }
-board_dir() {
-  local b
-  b=$(sed -n 's/^board:[[:space:]]*//p' "$rel/plan.md" | head -1)
-  case $b in none | '') return ;; \~/*) b=$HOME/${b#\~/} ;; esac
-  [ -d "$b" ] && echo "${b%/}"
-}
-owner_lines() { awk '/^## Owner/{h=1; next} /^## /{h=0} h && /^- /' "$rel/plan.md"; }
+board_dir() { board_of "$rel/plan.md"; }
+owner_lines() { awk '/^## Owner[[:space:]]*$/{h=1; next} /^## /{h=0} h && /^- /' "$rel/plan.md"; }
 
 case $cmd in
   watch)
@@ -101,7 +99,7 @@ case $cmd in
     board=
     [ -z "$to" ] || board=$(board_dir)
     if [ -n "$to" ] && [ -z "$board" ]; then fail "no board for this run"; fi
-    printf -- '- %s %s%s\n' "$ts" "${once:+[once] }" "${words[*]}" >> "$rel/owner.md"
+    printf -- '- %s %s%s%s\n' "$ts" "${once:+[once] }" "${to:+[to $to] }" "${words[*]}" >> "$rel/owner.md"
     [ -z "$to" ] || printf -- '- %s owner → %s: %s\n' "$ts" "$to" "${words[*]}" >> "$board/$(basename "$repo").md"
     grep -oE 'item [0-9]+' <<<"${words[*]}" | while read -r _ n; do
       ! grep -qE "^- \[x\] *$n\." "$rel/plan.md" || echo "warning: item $n is already done" >&2

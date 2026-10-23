@@ -21,7 +21,7 @@ and what is explicitly out of scope>
 - [ ] 2. <item>    after: 1, check: <command>
 ### Discovered
 ### Final
-- [ ] 3. <final item, e.g. merge branches, reviewer, push per .autopilot/rules.md. Paired: every post in this repo's board file is acked or replaced, and the default branch equals the last acked sha>
+- [ ] 3. <final item, e.g. merge branches, reviewer, push per .autopilot/rules.md. Paired: no `[c]` or `[p]` items left, every post in this repo's board file is acked or replaced, and the default branch equals the last acked sha>
 
 ## Parking lot
 <work found but out of scope, or on the stop list; never worked by autopilot>
