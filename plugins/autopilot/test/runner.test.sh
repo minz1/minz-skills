@@ -148,6 +148,76 @@ test_limit_nap_ignores_note_and_pid() {
   nap_hook 'echo "- n" >> .autopilot/runs/t/owner.md'; go; kill $p
   local t; t=$(slept_total); ((t >= 590)) || die "slept $t"; log_has "woke reason=timeout"
 }
+board_setup() {
+  sed -i '/^board:/d' "$PLAN"; echo 'board: ~/.autopilot/t/board/' >> "$PLAN"
+  BOARD=$HOME/.autopilot/t/board; mkdir -p "$BOARD"; printf -- '- old line\n' > "$BOARD/peer.md"
+}
+board_wait() { sc 1 "AUTOPILOT: WAIT ${1:-20}"; sc 2 "$DONE"; }
+test_board_wake_addressed() {
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 2 ] && echo '- peer-3 → repo: x' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md after=20s"
+}
+test_board_no_wake_other_repo() {
+  setup; board_setup; board_wait 1
+  nap_hook "[ \$1 -eq 2 ] && printf -- '- peer-3 → other: x\n- ack other-2: ok\n- back repo-2\n' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=timeout"
+}
+test_board_wake_whole_name() {
+  setup; board_setup; board_wait 1
+  nap_hook "[ \$1 -eq 2 ] && echo '- p-1 → repox: x' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=timeout"
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 2 ] && echo '- ack repo-2: ok' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md"
+}
+test_board_wake_multi_recipient() {
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- p-1 → other, repo: x' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md after=10s"
+}
+test_board_wake_reject_and_done() {
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- 2026-10-23T07:33Z reject repo-4: y' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md"
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- done peer' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md"
+}
+test_board_own_file_ignored() {
+  setup; board_setup; board_wait 1
+  nap_hook "[ \$1 -eq 1 ] && echo '- ack repo-1 → repo: x' >> '$BOARD/repo.md'; exit 0"; go
+  log_has "woke reason=timeout"
+}
+test_board_shrunk_file_resets() {
+  setup; board_setup; printf -- '- a\n- b\n- c\n' > "$BOARD/peer.md"; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- p-1 → repo: x' > '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md"
+}
+test_board_partial_line() {
+  setup; board_setup; board_wait
+  nap_hook "case \$1 in 2) printf -- '- p-1 → repo: x' >> '$BOARD/peer.md' ;; 4) printf '\n' >> '$BOARD/peer.md' ;; esac; exit 0"; go
+  eq "$(slept_total)" 40 "slept"; eq "$(grep -c 'woke' "$LOG")" 1 "woke lines"; log_has "woke reason=board:peer.md"
+}
+test_board_new_file_wakes() {
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- n-1 → repo: x' > '$BOARD/newpeer.md'; exit 0"; go
+  log_has "woke reason=board:newpeer.md"
+}
+test_board_none_skipped() {
+  setup; echo 'board: none' >> "$PLAN"; board_wait 1; go
+  log_has "woke reason=timeout"; eq "$ERR" "" "stderr"
+}
+test_board_during_session_wakes_first_step() {
+  setup; board_setup
+  sc 1 "AUTOPILOT: WAIT 20" "$(jq -nc --arg f "$BOARD/peer.md" '{exec: ("echo \"- p-1 → repo: x\" >> " + $f)}')"; sc 2 "$DONE"; go
+  log_has "woke reason=board:peer.md after=0s"
+}
+test_limit_nap_ignores_board() {
+  setup; board_setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
+  nap_hook "[ \$1 -eq 1 ] && echo '- p-1 → repo: x' >> '$BOARD/peer.md'; exit 0"; go
+  local t; t=$(slept_total); ((t >= 590)) || die "slept $t"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go

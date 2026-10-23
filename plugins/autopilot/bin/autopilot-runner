@@ -8,6 +8,9 @@ for v in $(compgen -e | grep '^CLAUDE' | grep -vx CLAUDE_BIN); do unset "$v"; do
 cd "$repo" || exit 1
 
 child=
+board_dir=
+repo_name=$(basename "$repo")
+declare -A base_board=()
 running=
 mode='continue'
 reason=
@@ -46,6 +49,10 @@ read_header() {
   [[ $ceiling =~ ^[0-9]*\.?[0-9]+$ ]] || bad='weekly-ceiling'
   [[ $cap =~ ^[0-9]+$ ]] || bad='session-cap'
   [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
+  board_dir=$(header_value board)
+  case $board_dir in none | '') board_dir= ;; \~/*) board_dir=$HOME/${board_dir#\~/} ;; esac
+  board_dir=${board_dir%/}
+  [ -d "$board_dir" ] || board_dir=
 }
 
 step() {
@@ -57,19 +64,52 @@ step() {
 
 count_notes() { local c; c=$(grep -c '^- ' "$run/owner.md" 2>/dev/null); echo "${c:-0}"; }
 
-snapshot() { base_notes=$(count_notes); }
+board_files() {
+  local f
+  [ -n "$board_dir" ] || return 0
+  for f in "$board_dir"/*.md; do
+    [ -f "$f" ] && [ "${f##*/}" != "$repo_name.md" ] && printf '%s\n' "$f"
+  done
+}
+
+snapshot() {
+  local f
+  base_notes=$(count_notes)
+  base_board=()
+  while IFS= read -r f; do base_board[$f]=$(wc -l < "$f"); done < <(board_files)
+}
+
+addressed() {
+  local l r
+  while IFS= read -r l; do
+    if [[ $l =~ →\ ([^:]*) ]]; then
+      r=${BASH_REMATCH[1]}
+      [[ " ${r//,/ } " == *" $repo_name "* ]] && return 0
+    fi
+    [[ $l =~ ^-\ ([0-9T:-]+Z\ )?done\ [A-Za-z0-9_.-]+ ]] && return 0
+  done <<<"$1"
+  grep -oE '(^|[^A-Za-z])(ack|nack|reject) [A-Za-z0-9_.-]+-[0-9]+' <<<"$1" | sed -E 's/.* //; s/-[0-9]+$//' | grep -qxF -- "$repo_name"
+}
 
 wake_check() {
-  local p
-  [ "$(count_notes)" -le "${base_notes:-0}" ] || { echo note; return; }
-  for p in $wait_pids; do kill -0 "$p" 2>/dev/null || { echo "pid:$p"; return; }; done
+  local p f cur b
+  wake=
+  [ "$(count_notes)" -le "${base_notes:-0}" ] || { wake=note; return; }
+  for p in $wait_pids; do kill -0 "$p" 2>/dev/null || { wake="pid:$p"; return; }; done
+  while IFS= read -r f; do
+    cur=$(wc -l < "$f") b=${base_board[$f]:-0}
+    ((cur >= b)) || b=0
+    ((cur > b)) || continue
+    base_board[$f]=$cur
+    addressed "$(sed -n "$((b + 1)),${cur}p" "$f")" && { wake="board:${f##*/}"; return; }
+  done < <(board_files)
 }
 
 nap() {
   local total=$1 mode=$2 el=0 r= s
   while :; do
     if [ -e "$run/STOP" ]; then r=stop
-    elif [ "$mode" = full ]; then r=$(wake_check)
+    elif [ "$mode" = full ]; then wake_check; r=$wake
     fi
     [ -z "$r" ] || break
     ((el < total)) || { r=timeout; break; }
