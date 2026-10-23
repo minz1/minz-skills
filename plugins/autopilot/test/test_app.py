@@ -13,7 +13,7 @@ import pytest
 from conftest import MakeRun
 from rich.text import Text
 from textual.pilot import Pilot
-from textual.widgets import Button, Label, RadioButton, RichLog
+from textual.widgets import Button, Input, Label, ListView, Markdown, RadioButton, RichLog, TabbedContent
 
 NOW = float(calendar.timegm((2026, 10, 23, 15, 0, 0, 0, 0, 0)))
 Sessions = Callable[[], Awaitable[dict[str, Path]]]
@@ -455,3 +455,150 @@ async def test_cli_stderr_markup_safe(isolated: Path, make_run: MakeRun, monkeyp
     assert args[0] == "[/x] no [bold]"
     assert kwargs["severity"] == "error"
     assert kwargs["markup"] is False
+
+
+def feed_run(make_run: MakeRun, name: str, stamps: list[float], plan: str = "session-cap: 9\n") -> Path:
+    """Build a run whose runner log has one woke line per stamp."""
+    log = "".join(f"{iso(t)} woke reason=t{i} after=1s\n" for i, t in enumerate(stamps))
+    return make_run(name, plan=plan, log=log + f"{iso(NOW)} session=9 start mode=continue\n")
+
+
+def seen_file(home: Path) -> Path:
+    """Return the dash-seen path."""
+    return home / ".config" / "autopilot" / "dash-seen"
+
+
+def feed_lines(d: app.Dash) -> list[str]:
+    """Return the feed's rendered lines."""
+    return [line.text for line in d.query_one("#feed", RichLog).lines]
+
+
+def tab_label(d: app.Dash, pane: str) -> str:
+    """Return a tab's label text."""
+    return d.query_one(TabbedContent).get_tab(pane).label_text
+
+
+async def test_feed_order_divider_follow(isolated: Path, make_run: MakeRun) -> None:
+    """Newest is last, the divider precedes the first new event, and the view follows the end."""
+    stamps = [NOW - 7200 + 60 * i for i in range(80)]
+    repo = repo_of(feed_run(make_run, "a", stamps))
+    register(isolated, repo)
+    seen_file(isolated).parent.mkdir(parents=True, exist_ok=True)
+    seen_file(isolated).write_text(str(NOW - 3630))
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        assert tab_label(d, "feed-tab") == "Feed (20 new)"
+        await pilot.press("f")
+        await pilot.pause()
+        lines = feed_lines(d)
+        div = next(i for i, t in enumerate(lines) if "new since you last looked" in t)
+        assert f"({model.hhmm(NOW - 3630)}Z)" in lines[div]
+        assert "reason=t59 " in lines[div - 1]
+        assert "reason=t60 " in lines[div + 1]
+        assert "reason=t79 " in lines[-1]
+        log = d.query_one("#feed", RichLog)
+        assert log.max_scroll_y > 0
+        assert log.is_vertical_scroll_end
+
+
+async def test_seen_advances_on_leave(isolated: Path, make_run: MakeRun) -> None:
+    """Leaving the Feed tab marks everything seen."""
+    repo = repo_of(feed_run(make_run, "a", [NOW - 60]))
+    register(isolated, repo)
+    seen_file(isolated).write_text(str(NOW - 3600))
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        assert tab_label(d, "feed-tab") == "Feed (1 new)"
+        await pilot.press("f")
+        await pilot.press("g")
+        await pilot.pause()
+        assert abs(float(seen_file(isolated).read_text()) - NOW) < 1
+        assert tab_label(d, "feed-tab") == "Feed"
+
+
+async def test_seen_written_on_quit_and_default(isolated: Path, make_run: MakeRun) -> None:
+    """With no seen file the last 4 h are new, and quitting records the time."""
+    repo = repo_of(feed_run(make_run, "a", [NOW - 5 * 3600, NOW - 3 * 3600]))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        assert tab_label(d, "feed-tab") == "Feed (1 new)"
+        await pilot.press("q")
+    assert abs(float(seen_file(isolated).read_text()) - NOW) < 1
+
+
+async def test_tab_and_tab_keys(isolated: Path, make_run: MakeRun) -> None:
+    """G, f and o switch tabs and move focus into each tab."""
+    a, b = repo_of(working_run(make_run, "a")), repo_of(working_run(make_run, "b"))
+    register(isolated, a, b)
+    d = dash(isolated, live(a, b))
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        tabs = d.query_one(TabbedContent)
+        await pilot.press("f")
+        assert tabs.active == "feed-tab"
+        assert d.query_one("#feed", RichLog).has_focus
+        await pilot.press("o")
+        assert tabs.active == "owner"
+        assert d.query_one("#ownerlist", ListView).has_focus
+        await pilot.press("g")
+        assert tabs.active == "runs"
+        assert panes(d)[0].has_focus_within
+
+
+def owner_plan(*items: str) -> str:
+    """Make a plan with owner items."""
+    return "session-cap: 9\n## Owner\n" + "".join(f"- {i}\n" for i in items)
+
+
+async def test_owner_tab_lists_finished_runs(isolated: Path, make_run: MakeRun) -> None:
+    """A cleanly stopped run with Owner lines still lists them."""
+    run_dir = make_run("done", plan=owner_plan("pick a colour"), log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        assert tab_label(d, "owner") == "Owner (1)"
+        await pilot.press("o")
+        await pilot.pause()
+        items = d.query_one("#ownerlist", ListView).children
+        assert len(items) == 1
+        assert "pick a colour" in str(items[0].query_one(Label).content)
+        assert "pick a colour" in d.query_one("#owner-text", Markdown).source
+
+
+async def test_owner_answer_quotes_item(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An answer goes to the item's run as a note quoting the item."""
+    long_item = "decide whether the release [/x] should ship with the counters spec or wait for review " * 2
+    a = make_run("a", plan=owner_plan("first thing"), log=f"{iso(NOW)} stopped: done\n")
+    b = make_run("b", run="2026-10-21", plan=owner_plan(long_item.strip()), log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(a), repo_of(b))
+    d = dash(isolated)
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("o", "down", "enter")
+        await pilot.pause()
+        assert d.query_one("#answer", Input).has_focus
+        await pilot.press(*"ship it", "enter")
+        await pilot.pause()
+        assert d.query_one("#answer", Input).value == ""
+    note = f'Re owner item "{long_item.strip()[:70]}": ship it'
+    assert rec.calls == [((actions.note_argv(d.ap_bin, "2026-10-21", note, "plain"), repo_of(b)), {})]
+
+
+async def test_owner_empty_message(isolated: Path, make_run: MakeRun) -> None:
+    """With no owner items the tab says so."""
+    repo = repo_of(working_run(make_run, "a"))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("o")
+        await pilot.pause()
+        assert tab_label(d, "owner") == "Owner"
+        assert "nothing is waiting on you" in d.query_one("#owner-text", Markdown).source

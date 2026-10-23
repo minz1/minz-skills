@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import ClassVar, Literal
 
 import actions
+import feed
 import model
 import probe
 import stream
@@ -19,13 +20,16 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Footer,
     Input,
     Label,
+    ListItem,
+    ListView,
+    Markdown,
     RadioButton,
     RadioSet,
     RichLog,
@@ -38,6 +42,7 @@ WIDE = 160
 MIN_PANE = 12
 REFRESH_S = 2
 GIT_S = 10
+SEEN_DEFAULT_S = 4 * 3600
 COLORS = {
     "working": "green",
     "waiting": "blue",
@@ -88,6 +93,8 @@ class Snapshot:
     runs: list[Shown] = field(default_factory=list)
     usage: Text = field(default_factory=Text)
     board: Text = field(default_factory=Text)
+    events: list[feed.FeedEvent] = field(default_factory=list)
+    feed_sig: tuple[tuple[str, float, int], ...] = ()
 
 
 class UsageBar(Static):
@@ -172,8 +179,10 @@ class RunPane(Vertical):
         head.styles.background = COLORS[st]
 
     def on_descendant_focus(self, _: events.DescendantFocus) -> None:
-        """Show the focus marker at once."""
+        """Show the focus marker at once and remember this pane."""
         self.draw_head()
+        if isinstance(self.app, Dash):
+            self.app.last_pane = self.num
 
     def on_descendant_blur(self, _: events.DescendantBlur) -> None:
         """Drop the focus marker at once."""
@@ -344,11 +353,22 @@ class Dash(App[None]):
     RunGrid { grid-size: 1; grid-gutter: 0 1; height: 1fr; overflow-y: auto; }
     Screen.-wide RunGrid.multi { grid-size: 2; }
     BoardStrip { height: auto; max-height: 6; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    #feed { height: 1fr; }
+    #owner-split { height: 1fr; }
+    #ownerlist { width: 45%; height: 1fr; border: round $panel-lighten-2; }
+    #owner-side { width: 1fr; height: 1fr; }
+    #owner-item { height: 1fr; border: round $warning; padding: 0 1; }
+    #owner-answer { height: auto; border: round $accent; padding: 0 1; }
+    #owner-answer Horizontal { height: auto; }
+    #owner-answer RadioSet { width: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "quit"),
         Binding("n", "note", "note"),
         Binding("r", "control", "start/stop"),
+        Binding("g", "show_tab('runs')", "runs"),
+        Binding("f", "show_tab('feed-tab')", "feed"),
+        Binding("o", "show_tab('owner')", "owner"),
         Binding("a", "show_all", "finished runs"),
         Binding("s", "flip('show_sub')", "subagents", show=False),
         Binding("t", "flip('show_think')", "thinking", show=False),
@@ -377,6 +397,15 @@ class Dash(App[None]):
         self.busy = False
         self.again = False
         self.mounted_once = False
+        self.last_tab = "runs"
+        self.last_pane = 1
+        self.owner_list: list[tuple[Shown, str]] = []
+        self.owner_key: list[tuple[Path, str]] | None = None
+        self.feed_shown: tuple[int, float] | None = None
+        try:
+            self.seen = float(self.seen_path.read_text())
+        except (OSError, ValueError):
+            self.seen = self.clock() - SEEN_DEFAULT_S
         self.logger = logging.getLogger(f"autopilot.dash.{id(self)}")
         self.logger.propagate = False
         self.logger.addHandler(DashLog(self.home / ".cache" / "autopilot" / "dash.log", delay=True))
@@ -384,10 +413,38 @@ class Dash(App[None]):
     def compose(self) -> ComposeResult:
         """Lay out the screen."""
         yield UsageBar(Text("usage: no data yet", style="dim"))
-        with TabbedContent(initial="runs", id="tabs"), TabPane("Runs", id="runs"):
-            yield RunGrid()
-            yield BoardStrip()
+        with TabbedContent(initial="runs", id="tabs"):
+            with TabPane("Runs", id="runs"):
+                yield RunGrid()
+                yield BoardStrip()
+            with TabPane("Feed", id="feed-tab"):
+                yield RichLog(id="feed", wrap=True, markup=False, auto_scroll=False)
+            with TabPane("Owner", id="owner"), Horizontal(id="owner-split"):
+                yield ListView(id="ownerlist")
+                with Vertical(id="owner-side"):
+                    yield VerticalScroll(Markdown(id="owner-text", open_links=False), id="owner-item")
+                    with Vertical(id="owner-answer"):
+                        yield Input(placeholder="your answer: decide, approve, or say what you did", id="answer")
+                        with Horizontal():
+                            with RadioSet(id="answer-mode"):
+                                yield RadioButton(Text("note"), value=True)
+                                yield RadioButton(Text("--once"))
+                            yield Button("Send answer", variant="primary", id="send-answer")
         yield Footer()
+
+    @property
+    def seen_path(self) -> Path:
+        """Return where the since-you-looked time is kept."""
+        return self.home / ".config" / "autopilot" / "dash-seen"
+
+    def write_seen(self) -> None:
+        """Mark everything up to now as seen."""
+        self.seen = self.clock()
+        try:
+            self.seen_path.parent.mkdir(parents=True, exist_ok=True)
+            self.seen_path.write_text(f"{self.seen}\n")
+        except OSError:
+            self.logger.exception("could not write %s", self.seen_path)
 
     def on_mount(self) -> None:
         """Start refreshing."""
@@ -395,7 +452,8 @@ class Dash(App[None]):
         self.set_interval(REFRESH_S, self.kick)
 
     def on_unmount(self) -> None:
-        """Close the error log."""
+        """Record what was seen and close the error log."""
+        self.write_seen()
         for h in list(self.logger.handlers):
             h.close()
             self.logger.removeHandler(h)
@@ -460,6 +518,8 @@ class Dash(App[None]):
                 p.show(p.state, change)
         self.query_one(UsageBar).update(snap.usage)
         self.query_one(BoardStrip).show(snap.board)
+        self.render_feed()
+        await self.render_owner()
 
     def load(self, refs: list[model.RunRef], now: float) -> Snapshot:
         """Read every run's files and work out its state; runs in a thread."""
@@ -482,8 +542,13 @@ class Dash(App[None]):
             snap.runs.append(Shown(ref, files, state, finished))
         shown = [(s.ref, s.files) for s in snap.runs if self.show_all or not (s.finished or s.ref.missing)]
         snap.usage = model.burn(shown, self.global_ceiling(), now)
-        boards = [b for _, f in shown if (b := model.board_of(f.plan, self.home))]
-        snap.board = board_strip(list(dict.fromkeys(boards)), now)
+        boards = list(dict.fromkeys(b for _, f in shown if (b := model.board_of(f.plan, self.home))))
+        snap.board = board_strip(boards, now)
+        snap.feed_sig = feed_signature(shown, boards)
+        prev = self.snapshot
+        snap.events = (
+            prev.events if snap.feed_sig == prev.feed_sig else feed.feed_events(shown, boards, feed.cached_result)
+        )
         return snap
 
     async def sync_panes(self, shown: list[Shown]) -> None:
@@ -513,11 +578,122 @@ class Dash(App[None]):
         """Return the pane holding focus."""
         return next((p for p in self.query(RunPane) if p.has_focus_within), None)
 
+    def render_feed(self) -> None:
+        """Redraw the feed when its events or the seen time changed."""
+        events_, seen = self.snapshot.events, self.seen
+        if self.feed_shown == (id(events_), seen):
+            return
+        self.feed_shown = (id(events_), seen)
+        log = self.query_one("#feed", RichLog)
+        follow = log.is_vertical_scroll_end or log.max_scroll_y == 0
+        out, new = [], 0
+        for e in events_:
+            fresh = e.at > seen
+            if fresh and not new:
+                out.append(Text(f"──── new since you last looked ({model.hhmm(seen)}Z) ────", style="bold yellow"))
+            new += fresh
+            line = Text(f"{model.hhmm(e.at)} ", style="bold" if fresh else "dim")
+            line.append(f"{e.who:<11} ", style="bold")
+            body = e.body.copy()
+            if fresh:
+                body.stylize("bold")
+            out.append(line.append_text(body))
+        log.clear()
+        if out:
+            log.write(Text("\n").join(out), scroll_end=False)
+        if follow:
+            log.scroll_end(animate=False)
+        self.query_one(TabbedContent).get_tab("feed-tab").label = f"Feed ({new} new)" if new else "Feed"
+
+    async def render_owner(self) -> None:
+        """Refill the owner list when the items changed."""
+        items = [(s, ln) for s in self.snapshot.runs if not s.ref.missing for ln in model.owner_items(s.files.plan)]
+        key = [(s.ref.run_dir, ln) for s, ln in items]
+        if key == self.owner_key:
+            return
+        self.owner_key, self.owner_list = key, items
+        lv = self.query_one("#ownerlist", ListView)
+        old = lv.index
+        await lv.clear()
+        rows = [
+            Text.assemble((f"{model.clean(s.ref.repo.name):<11} ", "bold"), model.clean(ln[2:])[:80]) for s, ln in items
+        ]
+        await lv.extend(ListItem(Label(r)) for r in rows)
+        self.query_one(TabbedContent).get_tab("owner").label = f"Owner ({len(items)})" if items else "Owner"
+        if items:
+            lv.index = min(old or 0, len(items) - 1)
+        self.show_owner_item()
+
+    def show_owner_item(self) -> None:
+        """Show the highlighted owner item in full."""
+        lv = self.query_one("#ownerlist", ListView)
+        md = self.query_one("#owner-text", Markdown)
+        if lv.index is None or lv.index >= len(self.owner_list):
+            md.update("_nothing is waiting on you_" if not self.owner_list else "")
+            return
+        s, ln = self.owner_list[lv.index]
+        repo, run = model.clean(s.ref.repo.name), model.clean(s.ref.run_dir.name)
+        md.update(f"**{repo}** · run {run} · *needs you*\n\n{model.clean(ln[2:])}")
+
+    def on_list_view_highlighted(self) -> None:
+        """Follow the owner list's highlight."""
+        self.show_owner_item()
+
+    def on_list_view_selected(self) -> None:
+        """Jump to the answer box on Enter."""
+        self.query_one("#answer", Input).focus()
+
+    def on_button_pressed(self, e: Button.Pressed) -> None:
+        """Send an owner answer from its button."""
+        if e.button.id == "send-answer":
+            self.send_answer()
+
+    def on_input_submitted(self, e: Input.Submitted) -> None:
+        """Send an owner answer on Enter."""
+        if e.input.id == "answer":
+            self.send_answer()
+
+    def send_answer(self) -> None:
+        """Send the answer as a note quoting the selected owner item."""
+        lv, box = self.query_one("#ownerlist", ListView), self.query_one("#answer", Input)
+        text = box.value.strip()
+        if lv.index is None or lv.index >= len(self.owner_list) or not text:
+            return
+        s, ln = self.owner_list[lv.index]
+        note = f'Re owner item "{model.clean(ln[2:])[:70]}": {text}'
+        mode: actions.NoteMode = "once" if self.query_one("#answer-mode", RadioSet).pressed_index == 1 else "plain"
+        self.run_argv(actions.note_argv(self.ap_bin, s.ref.run_dir.name, note, mode), s.ref.repo)
+        box.value = ""
+
+    def action_show_tab(self, tab: str) -> None:
+        """Switch tab."""
+        self.query_one(TabbedContent).active = tab
+
+    def on_tabbed_content_tab_activated(self, e: TabbedContent.TabActivated) -> None:
+        """Move focus into the new tab, and mark the feed seen when leaving it."""
+        tab = e.pane.id or ""
+        if self.last_tab == "feed-tab" and tab != "feed-tab":
+            self.write_seen()
+            self.render_feed()
+        self.last_tab = tab
+        if tab == "feed-tab":
+            log = self.query_one("#feed", RichLog)
+            log.focus()
+            self.call_after_refresh(log.scroll_end, animate=False)
+        elif tab == "owner":
+            lv = self.query_one("#ownerlist", ListView)
+            lv.focus()
+            if lv.index is None and self.owner_list:
+                lv.index = 0
+        else:
+            self.action_pane(self.last_pane)
+
     def action_pane(self, n: int) -> None:
         """Focus pane n."""
         panes = list(self.query(RunPane))
-        if 0 < n <= len(panes):
-            panes[n - 1].stream_log.focus()
+        if panes:
+            self.query_one(TabbedContent).active = "runs"
+            panes[min(max(n, 1), len(panes)) - 1].stream_log.focus()
 
     def action_show_all(self) -> None:
         """Show or hide finished and missing runs."""
@@ -538,8 +714,10 @@ class Dash(App[None]):
         return [model.clean(f.stem) for f, _ in model.board_lines(board) if f.stem != ref.repo.name]
 
     def action_note(self) -> None:
-        """Open the note dialog for the focused pane's run."""
-        if p := self.focused_pane():
+        """Open the note dialog for the focused pane's run, or go to the owner answer box."""
+        if self.query_one(TabbedContent).active == "owner":
+            self.query_one("#answer", Input).focus()
+        elif p := self.focused_pane():
             shown = next((s for s in self.snapshot.runs if s.ref == p.ref), None)
             peers = self.peers(p.ref, shown.files.plan) if shown else []
             repo = p.ref.repo
@@ -574,6 +752,23 @@ class Dash(App[None]):
         """Follow the end of the focused pane's stream."""
         if p := self.focused_pane():
             p.stream_log.scroll_end(animate=False)
+
+
+def feed_signature(
+    runs: list[tuple[model.RunRef, model.RunFiles]], boards: list[Path]
+) -> tuple[tuple[str, float, int], ...]:
+    """Fingerprint the feed's source files by mtime and size."""
+    paths = [r.run_dir / n for r, _ in runs for n in ("runner.log", "owner.md", "log.md")]
+    paths += [f for b in boards for f, _ in model.board_lines(b)]
+    out = []
+    for p in paths:
+        try:
+            st = p.stat()
+        except OSError:
+            out.append((str(p), 0.0, -1))
+        else:
+            out.append((str(p), st.st_mtime, st.st_size))
+    return tuple(out)
 
 
 def board_strip(boards: list[Path], now: float) -> Text:
