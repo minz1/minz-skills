@@ -6,13 +6,14 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+import actions
 import app
 import model
 import pytest
 from conftest import MakeRun
 from rich.text import Text
 from textual.pilot import Pilot
-from textual.widgets import RichLog
+from textual.widgets import Button, Label, RadioButton, RichLog
 
 NOW = float(calendar.timegm((2026, 10, 23, 15, 0, 0, 0, 0, 0)))
 Sessions = Callable[[], Awaitable[dict[str, Path]]]
@@ -290,3 +291,167 @@ def test_head_line_is_plain_text() -> None:
     head = app.head_line(1, "a[/b]", "x", focused=True)
     assert isinstance(head, Text)
     assert head.plain == "1  ◆ a[/b] · x"
+
+
+class Recorder:
+    """Collects calls made in place of a Dash method."""
+
+    def __init__(self) -> None:
+        """Start with no calls."""
+        self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def __call__(self, *args: object, **kwargs: object) -> None:
+        """Record one call."""
+        self.calls.append((args, kwargs))
+
+
+async def note_setup(
+    isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch, board: dict[str, str] | None = None
+) -> tuple[app.Dash, Recorder, Path]:
+    """Make a dash on one live run with run_argv recorded."""
+    log = f"{iso(NOW - 120)} session=1 start mode=continue\n"
+    run_dir = make_run("me", plan="session-cap: 9\n", log=log, board=board)
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated, live(repo_of(run_dir)))
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    return d, rec, run_dir
+
+
+async def test_note_dialog_returns_argv(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """N, text, Enter sends a plain note to the pane's run."""
+    d, rec, run_dir = await note_setup(isolated, make_run, monkeypatch)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("n")
+        assert isinstance(d.screen, app.NoteDialog)
+        await pilot.press(*"hi [/x] q", "enter")
+        await pilot.pause()
+        assert not isinstance(d.screen, app.NoteDialog)
+    assert rec.calls == [((actions.note_argv(d.ap_bin, run_dir.name, "hi [/x] q", "plain"), repo_of(run_dir)), {})]
+
+
+async def test_note_dialog_escape_and_empty(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Esc cancels and empty text does nothing."""
+    d, rec, _ = await note_setup(isolated, make_run, monkeypatch)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("n", "enter")
+        assert isinstance(d.screen, app.NoteDialog)
+        await pilot.press("space", "enter")
+        assert isinstance(d.screen, app.NoteDialog)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(d.screen, app.NoteDialog)
+    assert rec.calls == []
+
+
+async def test_note_modes_offer_board_peers(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dialog offers --once and --to for each other board file."""
+    board = {"me.md": "- me-1 → nix: x\n", "nix.md": "- ack me-1: ok\n", "p[red]q.md": ""}
+    d, rec, run_dir = await note_setup(isolated, make_run, monkeypatch, board)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("n")
+        buttons = list(d.screen.query(RadioButton))
+        assert [str(b.label) for b in buttons][2:] == [
+            "--to nix (posts to the board, wakes nix)",
+            "--to p[red]q (posts to the board, wakes p[red]q)",
+        ]
+        buttons[2].value = True
+        await pilot.press(*"go", "enter")
+        await pilot.pause()
+        await pilot.press("n")
+        list(d.screen.query(RadioButton))[1].value = True
+        await pilot.press(*"once", "enter")
+        await pilot.pause()
+    argvs = [c[0][0] for c in rec.calls]
+    assert argvs == [
+        actions.note_argv(d.ap_bin, run_dir.name, "go", ("to", "nix")),
+        actions.note_argv(d.ap_bin, run_dir.name, "once", "once"),
+    ]
+
+
+async def test_stop_now_needs_two_presses(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop now arms on the first press and sends on the second."""
+    d, rec, run_dir = await note_setup(isolated, make_run, monkeypatch)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("r")
+        assert isinstance(d.screen, app.RunDialog)
+        await pilot.click("#now")
+        assert isinstance(d.screen, app.RunDialog)
+        assert "Press again" in str(d.screen.query_one("#warn", Label).content)
+        assert rec.calls == []
+        await pilot.pause(0.3)
+        await pilot.click("#now")
+        await pilot.pause()
+        assert not isinstance(d.screen, app.RunDialog)
+        await pilot.press("r")
+        await pilot.click("#stop")
+        await pilot.pause()
+        await pilot.press("r", "escape")
+        await pilot.pause()
+    repo = repo_of(run_dir)
+    assert [c[0] for c in rec.calls] == [
+        (actions.control_argv(d.ap_bin, run_dir.name, "stop-now"), repo),
+        (actions.control_argv(d.ap_bin, run_dir.name, "stop"), repo),
+    ]
+
+
+async def test_run_dialog_start_for_stopped(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stopped run offers Start only."""
+    run_dir = make_run("me", plan="session-cap: 9\n", log=f"{iso(NOW)} stopped: two crashes\n")
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated)
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("r")
+        ids = [b.id for b in d.screen.query(Button)]
+        assert ids == ["start", "cancel"]
+        await pilot.click("#start")
+        await pilot.pause()
+    assert rec.calls == [((actions.control_argv(d.ap_bin, run_dir.name, "start"), repo_of(run_dir)), {})]
+
+
+async def toast_run(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch, ap_bin: str) -> Recorder:
+    """Send a note through the real action path with AP_BIN set, recording toasts."""
+    monkeypatch.setenv("AP_BIN", ap_bin)
+    log = f"{iso(NOW - 120)} session=1 start mode=continue\n"
+    run_dir = make_run("me", plan="session-cap: 9\n", log=log)
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated, live(repo_of(run_dir)))
+    toasts = Recorder()
+    monkeypatch.setattr(d, "notify", toasts)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("n", *"hi", "enter")
+        await settle(pilot)
+        assert d.is_running
+    return toasts
+
+
+async def test_action_oserror_toast_app_stays(
+    isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing CLI gives a red toast and the app stays up."""
+    toasts = await toast_run(isolated, make_run, monkeypatch, str(isolated / "missing"))
+    assert len(toasts.calls) == 1
+    args, kwargs = toasts.calls[0]
+    assert "missing" in str(args[0])
+    assert kwargs["severity"] == "error"
+    assert kwargs["markup"] is False
+
+
+async def test_cli_stderr_markup_safe(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI stderr that looks like markup is shown literally."""
+    bad = isolated / "bad-ap"
+    bad.write_text("#!/usr/bin/env bash\necho '[/x] no [bold]' >&2\nexit 1\n")
+    bad.chmod(0o755)
+    toasts = await toast_run(isolated, make_run, monkeypatch, str(bad))
+    args, kwargs = toasts.calls[0]
+    assert args[0] == "[/x] no [bold]"
+    assert kwargs["severity"] == "error"
+    assert kwargs["markup"] is False

@@ -9,8 +9,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
+import actions
 import model
 import probe
 import stream
@@ -18,8 +19,20 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Grid, Vertical
-from textual.widgets import Footer, RichLog, Static, TabbedContent, TabPane
+from textual.containers import Grid, Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button,
+    Footer,
+    Input,
+    Label,
+    RadioButton,
+    RadioSet,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 WIDE = 160
 MIN_PANE = 12
@@ -33,6 +46,7 @@ COLORS = {
     "done": "#808080",
     "missing": "#808080",
 }
+CONTROLS: dict[str, Literal["start", "stop", "stop-now"]] = {"stop": "stop", "now": "stop-now", "start": "start"}
 KIND_STYLE = {"tool": "cyan", "error": "red", "think": "dim"}
 
 Sessions = Callable[[], Awaitable[dict[str, Path]]]
@@ -211,6 +225,111 @@ class RunPane(Vertical):
             self.write_events(self.reader.events[-new:])
 
 
+class NoteDialog(ModalScreen[list[str] | None]):
+    """Ask for an owner note and return its argv."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss_none", "cancel")]
+    DEFAULT_CSS = """
+    NoteDialog { align: center middle; }
+    NoteDialog > Vertical { width: 90; height: auto; border: heavy $accent; background: $surface; padding: 1 2; }
+    NoteDialog Input { margin: 1 0; }
+    NoteDialog Horizontal { height: auto; }
+    """
+
+    def __init__(self, ap_bin: str, ref: model.RunRef, peers: list[str]) -> None:
+        """Hold the run the note is for and its board peers."""
+        super().__init__()
+        self.ap_bin, self.ref, self.peers = ap_bin, ref, peers
+
+    def compose(self) -> ComposeResult:
+        """Lay out the dialog."""
+        title = Text("Owner note for ")
+        title.append(model.clean(self.ref.repo.name), style="bold")
+        title.append(f" (run {model.clean(self.ref.run_dir.name)})")
+        with Vertical():
+            yield Label(title)
+            yield Input(placeholder="what should the run do differently?", id="text")
+            with RadioSet(id="mode"):
+                yield RadioButton(Text("plain note"), value=True)
+                yield RadioButton(Text("--once (applies one time)"))
+                for p in self.peers:
+                    yield RadioButton(Text(f"--to {p} (posts to the board, wakes {p})"))
+            with Horizontal():
+                yield Button("Send", variant="primary", id="send")
+                yield Button("Cancel", id="cancel")
+
+    def action_dismiss_none(self) -> None:
+        """Close without sending."""
+        self.dismiss(None)
+
+    def send(self) -> None:
+        """Return the note's argv, unless the text is empty."""
+        text = self.query_one("#text", Input).value.strip()
+        if not text:
+            return
+        idx = self.query_one(RadioSet).pressed_index
+        mode: actions.NoteMode = "plain" if idx <= 0 else "once" if idx == 1 else ("to", self.peers[idx - 2])
+        self.dismiss(actions.note_argv(self.ap_bin, self.ref.run_dir.name, text, mode))
+
+    def on_button_pressed(self, e: Button.Pressed) -> None:
+        """Send or cancel."""
+        if e.button.id == "send":
+            self.send()
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self) -> None:
+        """Send on Enter."""
+        self.send()
+
+
+class RunDialog(ModalScreen[list[str] | None]):
+    """Offer start or stop for a run and return the argv."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss_none", "cancel")]
+    DEFAULT_CSS = """
+    RunDialog { align: center middle; }
+    RunDialog > Vertical { width: 76; height: auto; border: heavy $accent; background: $surface; padding: 1 2; }
+    RunDialog Horizontal { height: auto; }
+    """
+
+    def __init__(self, ap_bin: str, ref: model.RunRef) -> None:
+        """Hold the run to control."""
+        super().__init__()
+        self.ap_bin, self.ref, self.armed = ap_bin, ref, False
+
+    def compose(self) -> ComposeResult:
+        """Lay out the dialog."""
+        title = Text(model.clean(self.ref.repo.name), style="bold")
+        title.append(f" is {'running' if self.ref.live else 'stopped'} (run {model.clean(self.ref.run_dir.name)})")
+        with Vertical():
+            yield Label(title)
+            with Horizontal():
+                if self.ref.live:
+                    yield Button("Stop after this session", id="stop")
+                    yield Button("Stop now", variant="error", id="now")
+                else:
+                    yield Button("Start", variant="success", id="start")
+                yield Button("Cancel", id="cancel")
+            yield Label(id="warn")
+
+    def action_dismiss_none(self) -> None:
+        """Close without acting."""
+        self.dismiss(None)
+
+    def on_button_pressed(self, e: Button.Pressed) -> None:
+        """Act on a button; Stop now needs a second press."""
+        what = CONTROLS.get(e.button.id or "")
+        if what is None:
+            self.dismiss(None)
+        elif what == "stop-now" and not self.armed:
+            self.armed = True
+            warn = Text("Kills the running session (the next start recovers). Press again to confirm.", style="red")
+            self.query_one("#warn", Label).update(warn)
+        else:
+            self.dismiss(actions.control_argv(self.ap_bin, self.ref.run_dir.name, what))
+
+
 class Dash(App[None]):
     """The autopilot dashboard."""
 
@@ -228,6 +347,8 @@ class Dash(App[None]):
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "quit"),
+        Binding("n", "note", "note"),
+        Binding("r", "control", "start/stop"),
         Binding("a", "show_all", "finished runs"),
         Binding("s", "flip('show_sub')", "subagents", show=False),
         Binding("t", "flip('show_think')", "thinking", show=False),
@@ -408,6 +529,46 @@ class Dash(App[None]):
         if (p := self.focused_pane()) and what in ("show_sub", "show_think", "compact"):
             setattr(p, what, not getattr(p, what))
             p.rebuild()
+
+    def peers(self, ref: model.RunRef, plan: str) -> list[str]:
+        """List the other files on a run's board."""
+        board = model.board_of(plan, self.home)
+        if board is None:
+            return []
+        return [model.clean(f.stem) for f, _ in model.board_lines(board) if f.stem != ref.repo.name]
+
+    def action_note(self) -> None:
+        """Open the note dialog for the focused pane's run."""
+        if p := self.focused_pane():
+            shown = next((s for s in self.snapshot.runs if s.ref == p.ref), None)
+            peers = self.peers(p.ref, shown.files.plan) if shown else []
+            repo = p.ref.repo
+            self.push_screen(NoteDialog(self.ap_bin, p.ref, peers), lambda argv: self.send_argv(argv, repo))
+
+    def action_control(self) -> None:
+        """Open the start/stop dialog for the focused pane's run."""
+        if (p := self.focused_pane()) and not p.ref.missing:
+            repo = p.ref.repo
+            self.push_screen(RunDialog(self.ap_bin, p.ref), lambda argv: self.send_argv(argv, repo))
+
+    def send_argv(self, argv: list[str] | None, cwd: Path) -> None:
+        """Run a dialog's argv unless it was cancelled."""
+        if argv:
+            self.run_argv(argv, cwd)
+
+    def run_argv(self, argv: list[str], cwd: Path) -> None:
+        """Run a CLI call in the background, toast its result and refresh."""
+        self.run_worker(self.act(argv, cwd), group="action", exit_on_error=False)
+
+    async def act(self, argv: list[str], cwd: Path) -> None:
+        """Run one CLI call and report it."""
+        res = await actions.run_action(argv, cwd, os.environ)
+        title = " ".join(argv[1:2])
+        if res.ok:
+            self.notify(res.message, title=title, markup=False)
+        else:
+            self.notify(res.message, title=f"{title} failed", severity="error", markup=False, timeout=12)
+        self.kick()
 
     def action_follow(self) -> None:
         """Follow the end of the focused pane's stream."""
