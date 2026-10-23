@@ -71,6 +71,7 @@ case $cmd in
   stop)
     live || { echo "nothing is running"; exit 0; }
     if [ -n "$now" ]; then
+      echo "$(date -u +%FT%TZ) stop --now by owner" >> "$rel/runner.log"
       tmux kill-session -t "$target"
       echo "killed tmux session $sess"
     else

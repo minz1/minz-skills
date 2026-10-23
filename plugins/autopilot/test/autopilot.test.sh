@@ -143,6 +143,13 @@ test_stop_now_kills() {
   tmux_gone autopilot-repo
   waitfor "$LOG" "exit=killed"
 }
+test_stop_now_logs_owner() {
+  setup; start_run; ap stop --now
+  tmux_gone autopilot-repo; waitfor "$LOG" "exit=killed"
+  local o k
+  o=$(grep -n 'stop --now by owner' "$LOG" | cut -d: -f1); k=$(grep -n 'exit=killed' "$LOG" | cut -d: -f1)
+  [ -n "$o" ] && [ "$o" -lt "$k" ] || die "order: $(cat "$LOG")"
+}
 
 test_status_live() {
   setup; start_run; ap status

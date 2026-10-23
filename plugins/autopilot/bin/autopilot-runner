@@ -17,13 +17,13 @@ mode=${AUTOPILOT_RESUME_MODE:-continue}
 reason=${AUTOPILOT_RESUME_REASON:-}
 crashes=${AUTOPILOT_RESUME_CRASHES:-0}
 unset AUTOPILOT_RESUME_MODE AUTOPILOT_RESUME_REASON AUTOPILOT_RESUME_CRASHES
-launched=0
 idx=$(mktemp -u)
 
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$run/runner.log"; }
 stop() {
   log "stopped: $1"
-  echo "stopped: $1" >> "$run/plan.md"
+  echo "stopped: $1" >> "$run/log.md"
+  [ -z "$board_dir" ] || echo "- $repo_name: runner stopped $(date -u +%FT%TZ): $1" >> "$board_dir/$repo_name.md"
   exit 0
 }
 
@@ -31,7 +31,7 @@ on_kill() {
   if [ -n "$running" ]; then
     n=$running
     running=
-    log "session=$n end exit=killed detail=\"\" weekly=? five_hour=? peak_ctx=0"
+    log "session=$n end exit=killed detail=\"${1:-}\" weekly=? five_hour=? peak_ctx=0"
   fi
   if [ -n "$child" ]; then
     kill -- -"$child" 2>/dev/null
@@ -40,7 +40,11 @@ on_kill() {
   rm -f "$idx" "$idx.lock"
   exit 130
 }
-trap on_kill HUP TERM INT
+trap "on_kill HUP" HUP
+trap "on_kill TERM" TERM
+trap "on_kill INT" INT
+
+work_sessions() { grep -E '^[^ ]+ session=[0-9]+ end ' "$run/runner.log" 2>/dev/null | grep -vc ' exit=WAIT '; }
 
 header_value() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$run/plan.md" | head -1; }
 
@@ -179,13 +183,15 @@ read_header || { echo "autopilot-runner: $bad" >&2; exit 2; }
 while :; do
   [ ! -e "$run/STOP" ] || stop "stop file"
   read_header || stop "$bad"
+  if [ "$mode" != wrapup ] && [ "$(work_sessions)" -ge "$cap" ]; then
+    reason="session cap $cap reached; raise session-cap in plan.md to continue" mode=wrapup
+  fi
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) (start|end) .*/\1/p' "$run/runner.log" 2>/dev/null | sort -n | tail -1)
   n=$((${n:-0} + 1))
   sha=$(checkpoint "$n")
   [ -n "$sha" ] || stop "checkpoint failed"
   log "session=$n start mode=$mode checkpoint=$sha"
   running=$n
-  launched=$((launched + 1))
 
   args=(-p "/autopilot:autopilot $mode $run" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose)
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
@@ -241,8 +247,6 @@ while :; do
   read_header || stop "$bad"
   if [ "${weekly:-?}" != '?' ] && awk -v a="$weekly" -v b="$ceiling" 'BEGIN { exit !(a + 0 >= b + 0) }'; then
     reason="weekly usage $weekly" mode=wrapup
-  elif [ "$launched" -ge "$cap" ]; then
-    reason="session cap $cap" mode=wrapup
   fi
   [ "$kind" != WAIT ] || nap $((${detail%% *} * 60)) full
 done

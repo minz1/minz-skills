@@ -59,7 +59,8 @@ log_lacks() { ! grep -qF -- "$1" "$LOG" || die "runner.log has '$1'"; }
 exits() { grep -o ' end exit=[A-Za-z]*' "$LOG" | sed 's/.*exit=//' | paste -sd' '; }
 stopped() {
   [[ $(tail -1 "$LOG") == *"stopped: $1" ]] || die "runner.log does not end 'stopped: $1': $(tail -1 "$LOG")"
-  eq "$(tail -1 "$PLAN")" "stopped: $1" "plan.md last line"
+  eq "$(tail -1 "$RUN/log.md")" "stopped: $1" "log.md last line"
+  ! grep -q '^stopped:' "$PLAN" || die "plan.md has a stopped line"
 }
 slept() { cat "$W/slept" 2>/dev/null; }
 slept_total() { awk '{s += $2} END {print s + 0}' "$W/slept" 2>/dev/null || echo 0; }
@@ -262,6 +263,22 @@ test_resume_note_wakes_stop() {
   nap_hook '[ $1 -ge 1 ] && touch .autopilot/runs/t/STOP; exit 0'; go
   log_has "resume wait"; log_has "woke reason=stop"; expect_calls 0; stopped "stop file"
 }
+test_kill_signal_named() {
+  setup; sc 1 "$NEXT" '{"sleep":30}'
+  bash "$RUNNER" "$repo" .autopilot/runs/t >"$W/out" 2>&1 &
+  local pid=$!
+  waitfor "$LOG" "session=1 start"; waitfor "$FAKE_SCENARIO/sleep.pid" ""
+  kill -HUP "$pid"; wait "$pid"
+  log_has 'session=1 end exit=killed detail="HUP"'
+}
+test_stop_posts_to_own_board() {
+  setup; board_setup; sc 1 "AUTOPILOT: STOP need owner"; go
+  tail -1 "$BOARD/repo.md" | grep -qE '^- repo: runner stopped [0-9T:-]+Z: owner needed: need owner$' || die "board: $(cat "$BOARD/repo.md")"
+}
+test_stop_no_board_no_file() {
+  setup; sc 1 "$DONE"; go
+  [ ! -e "$HOME/.autopilot/t" ] || die "board dir created"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go
@@ -340,15 +357,20 @@ test_stop_beats_ceiling() {
   setup; sc 1 "AUTOPILOT: STOP x" "$W81"; go
   expect_calls 1; no_wrapup
 }
+CAPMSG="session cap 2 reached; raise session-cap in plan.md to continue"
 test_session_cap_runs_wrapup() {
   setup; set_cap 2; sc 1 "$NEXT"; sc 2 "$NEXT"; sc 3 "$DONE"; go
-  call_has 3 "autopilot wrapup"; stopped "session cap 2"
+  call_has 3 "autopilot wrapup"; stopped "$CAPMSG"
 }
-test_cap_counts_per_start() {
-  setup; set_cap 2; sc 1 "$NEXT"; sc 2 "$NEXT"; sc 3 "$DONE"; go
-  FAKE_SCENARIO=$W/scn2; mkdir -p "$FAKE_SCENARIO"; sc 1 "$NEXT"; sc 2 "$NEXT"; sc 3 "$DONE"; go
-  call_has 1 "autopilot continue"; call_has 2 "autopilot continue"; call_has 3 "autopilot wrapup"
-  log_has "session=4 start"; log_has "session=6 start"
+test_cap_counts_work_not_waits() {
+  setup; set_cap 2; sc 1 "AUTOPILOT: WAIT 1"; sc 2 "$NEXT"; sc 3 "AUTOPILOT: WAIT 1"; sc 4 "$NEXT"; sc 5 "$DONE"; go
+  expect_calls 5; call_has 4 "autopilot continue"; call_has 5 "autopilot wrapup"
+}
+test_cap_survives_restart() {
+  setup; set_cap 2
+  printf '%s session=1 end exit=NEXT detail="" w\n%s session=2 end exit=NEXT detail="" w\n' "$(date -u +%FT%TZ)" "$(date -u +%FT%TZ)" > "$LOG"
+  sc 1 "$DONE"; go
+  call_has 1 "autopilot wrapup"; log_has "session=3 start"; stopped "$CAPMSG"
 }
 test_header_reread_each_loop() {
   setup; set_cap 1
@@ -517,7 +539,7 @@ test_killed_logs_end() {
   t0=$SECONDS; kill -TERM "$pid"; wait "$pid"; RC=$?
   eq "$RC" 130 "exit"
   [ $((SECONDS - t0)) -le 3 ] || die "slow exit"
-  log_has 'session=1 end exit=killed detail="" weekly=? five_hour=? peak_ctx=0'
+  log_has 'session=1 end exit=killed detail="TERM" weekly=? five_hour=? peak_ctx=0'
   gone "$(cat "$FAKE_SCENARIO/fake.pid")" fake-claude
   gone "$(cat "$FAKE_SCENARIO/sleep.pid")" sleep
 }
