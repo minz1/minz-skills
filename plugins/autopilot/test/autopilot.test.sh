@@ -286,6 +286,14 @@ test_dash_builds_panes() {
   has "$all" "repo · " pane; has "$all" "other · " pane; has "$all" "open: x-1 → repo" board
   tmux -L autopilot-dash kill-server
 }
+test_dash_quoting() {
+  setup "it's \$(touch pwned) repo"; tmux new-session -d -s autopilot-x -c "$repo" 'sleep 600'
+  TMUX=x ap dash; eq "$RC" 0 rc
+  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
+  sleep 2; [ ! -e "$W/pwned" ] && [ ! -e "$repo/pwned" ] || die "injection ran"
+  tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "it's \$(touch pwned) repo" || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
+  tmux -L autopilot-dash kill-server
+}
 test_watch_once_via_cli() { setup; bash "$DIR/../bin/autopilot-watch" --once --width 60 --height 8 "$repo" | grep -q 'repo · ' || die "no header"; }
 test_session_name_sanitized() {
   setup my.repo; start_run
