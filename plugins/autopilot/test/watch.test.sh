@@ -107,7 +107,7 @@ test_control_chars_stripped() {
   local b=$W/board; mkdir -p "$b"; printf -- '- p-1 → r\033[2Jx: y\n' > "$b/p.md"
   local raw; raw=$(bash "$WATCH" --once --width 100 --height 12 "$repo"; bash "$WATCH" board --once --width 100 --height 3 "$b")
   ! grep -qP '\x1b\]|\x07|\x1b\[2J' <<<"$raw" || die "control sequence passed through"
-  has "$(plain <<<"$raw")" "ab" text
+  has "$raw" "Zm9vb" text
 }
 test_spaced_repo() { setup "my repo"; live; session_start 1 1; frame; has "$(first)" "my repo · WORKING s1" header; }
 
