@@ -1,0 +1,22 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+namespace-packages = ["dash", "test"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D203", "D213", "COM812", "ISC001"]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**" = ["S101", "PLR2004"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+mypy_path = "dash"
+files = ["dash", "test"]
+
+[tool.pytest.ini_options]
+pythonpath = ["dash"]
+asyncio_mode = "auto"
+testpaths = ["test"]
