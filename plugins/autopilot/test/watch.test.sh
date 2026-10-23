@@ -111,6 +111,34 @@ test_control_chars_stripped() {
 }
 test_spaced_repo() { setup "my repo"; live; session_start 1 1; frame; has "$(first)" "my repo · WORKING s1" header; }
 
+test_tiny_widths() {
+  setup; live; session_start 4 1; mkstream
+  local w; for w in 3 4; do
+    eq "$(timeout 5 bash "$WATCH" --once --width "$w" --height 9 "$repo" | wc -l)" 9 "lines at width $w"
+  done
+}
+test_rollback_line_is_not_an_answer() {
+  setup; local b=$W/board; mkdir -p "$b"
+  printf -- '- n-1 → m: x\n' > "$b/n.md"; printf -- '- rollback n-1 is ready\n- still waiting on ack n-1\n' > "$b/m.md"
+  OUT=$(bash "$WATCH" board --once --width 100 --height 3 "$b" | plain); has "$(head -1 <<<"$OUT")" "open: n-1 → m" open
+}
+test_interactive_keys() {
+  setup; live; session_start 4 1
+  local i; for i in $(seq 60); do printf '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"line %s"}]}}\n' "$i"; done > "$RUN/sessions/4.jsonl"
+  unset AUTOPILOT_NOW
+  tmux -L wt -f /dev/null new-session -d -s w -x 100 -y 30 -e "W_=$WATCH" -e "R_=$repo" "exec bash \"\$W_\" \"\$R_\""
+  trap 'tmux kill-server 2>/dev/null; tmux -L wt kill-server 2>/dev/null' EXIT
+  sleep 1.5; tmux -L wt send-keys -t =w: Up Up; sleep 2.5
+  local cap; cap=$(tmux -L wt capture-pane -p -t =w:)
+  has "$cap" "↑6" scrolled; has "$cap" "line 54" view; lacks "$cap" "line 60" view
+  printf '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"line 61"}]}}\n' >> "$RUN/sessions/4.jsonl"
+  sleep 2.5; cap=$(tmux -L wt capture-pane -p -t =w:)
+  has "$cap" "↑7" anchored; has "$cap" "line 54" "anchored view"
+  tmux -L wt send-keys -t =w: End; sleep 2.5; cap=$(tmux -L wt capture-pane -p -t =w:)
+  has "$cap" "line 61" follow; lacks "$cap" "End=follow" follow
+  tmux -L wt kill-server
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -129,5 +157,8 @@ out=$(test_board_open_requests 2>/dev/null); t test_board_open_requests "$out" $
 out=$(test_hostile_plan_values 2>/dev/null); t test_hostile_plan_values "$out" $?
 out=$(test_control_chars_stripped 2>/dev/null); t test_control_chars_stripped "$out" $?
 out=$(test_spaced_repo 2>/dev/null); t test_spaced_repo "$out" $?
+out=$(test_tiny_widths 2>/dev/null); t test_tiny_widths "$out" $?
+out=$(test_rollback_line_is_not_an_answer 2>/dev/null); t test_rollback_line_is_not_an_answer "$out" $?
+out=$(test_interactive_keys 2>/dev/null); t test_interactive_keys "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

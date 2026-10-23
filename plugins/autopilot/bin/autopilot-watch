@@ -17,7 +17,7 @@ ago() {
   if (($1 < 60)); then echo "<1m"; elif (($1 < 5400)); then echo "$(($1 / 60))m"; else echo "$(($1 / 3600))h"; fi
 }
 hv() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$2" 2>/dev/null | head -1; }
-pct() { [ -n "$1" ] && awk -v x="$1" 'BEGIN { printf "%d%%", x * 100 }' || echo '?'; }
+pct() { [ -n "$1" ] && gawk -v x="$1" 'BEGIN { printf "%d%%", x * 100 }' || echo '?'; }
 board_path() {
   local b
   b=$(hv board "$1")
@@ -26,7 +26,7 @@ board_path() {
 }
 
 render_stream() { # <jsonl> <width> <sub> <think> <compact>
-  tail -n 1500 "$1" 2>/dev/null | jq -r --argjson sub "$3" --argjson think "$4" --argjson compact "$5" '
+  tail -n 4000 "$1" 2>/dev/null | jq -r --argjson sub "$3" --argjson think "$4" --argjson compact "$5" '
     def clean: tostring | gsub("[\u0000-\u0008\u000b-\u001f\u007f-\u009f]"; "");
     def one: clean | gsub("[\r\t]"; " ") | split("\n")[0];
     select(.type == "assistant" or .type == "user")
@@ -40,7 +40,7 @@ render_stream() { # <jsonl> <width> <sub> <think> <compact>
       elif .type == "tool_result" and .is_error == true then
         "E|\($p)✗ " + ((.content | if type == "array" then map(.text? // "") | join(" ") else . end) | one)
       else empty end' 2>/dev/null |
-    awk -v w="$2" '
+    gawk -v w="$2" 'BEGIN { if (w < 10) w = 10 }
       { tag = substr($0, 1, 1); s = substr($0, 3) }
       tag == "T" { while (length(s) > w) { print substr(s, 1, w); s = "  " substr(s, w + 1) } print s; next }
       tag == "U" { print "\033[36m" substr(s, 1, w) "\033[0m"; next }
@@ -48,10 +48,10 @@ render_stream() { # <jsonl> <width> <sub> <think> <compact>
       tag == "K" { print "\033[2m" substr(s, 1, w) "\033[0m"; next }'
 }
 
-count_sub() { tail -n 1500 "$1" 2>/dev/null | jq -c 'select(.parent_tool_use_id != null and (.type == "assistant" or .type == "user"))' 2>/dev/null | wc -l; }
+count_sub() { tail -n 4000 "$1" 2>/dev/null | jq -c 'select(.parent_tool_use_id != null and (.type == "assistant" or .type == "user"))' 2>/dev/null | wc -l; }
 
 fit() { # <width> <rows>: every line cut to width visible cells, exactly rows lines
-  awk -v w="$1" -v rows="$2" '
+  gawk -v w="$1" -v rows="$2" '
     function f(s,   out, n) { out = ""; n = 0
       while (length(s) > 0 && n < w) {
         if (match(s, /^\033\[[0-9;?]*[A-Za-z]/)) { out = out substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1) }
@@ -62,14 +62,14 @@ fit() { # <width> <rows>: every line cut to width visible cells, exactly rows li
 }
 
 open_requests() { # <board-dir>
-  awk '
+  gawk '
     FNR == 1 { file = FILENAME }
     { line = $0; sub(/^- ([0-9T:-]+Z )?/, "", line) }
     match(line, /^([A-Za-z0-9_.-]+-[0-9]+)( \(replaces ([A-Za-z0-9_.-]+-[0-9]+)\))? → ([^:]+)/, m) {
       post[m[1]] = m[4]; from[m[1]] = file; order[++n] = m[1]
       if (m[3] != "") replaced[m[3]] = 1
     }
-    { s = $0; while (match(s, /(ack|nack|reject) ([A-Za-z0-9_.-]+-[0-9]+)/, a)) { ans[a[2]][file] = 1; s = substr(s, RSTART + RLENGTH) } }
+    { s = $0; while (match(s, /^- ([0-9T:-]+Z )?((ack|nack|reject) )+([A-Za-z0-9_.-]+-[0-9]+)/, a)) { ans[a[4]][file] = 1; s = "" } }
     END {
       for (i = 1; i <= n; i++) { id = order[i]; ok = (id in replaced)
         if (id in ans) for (f in ans[id]) if (f != from[id]) ok = 1
@@ -87,7 +87,7 @@ state_of() { # <repo> [run] -> st label stream info[]
   live_session "$repo" && live=1
   lastl=$(grep -E '^[^ ]+ session=[0-9]+ (start|end) ' "$log" 2>/dev/null | tail -1)
   endl=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | tail -1)
-  after=$(awk '/^[^ ]+ session=[0-9]+ (start|end) /{a=""; next} {a = a $0 "\n"} END {printf "%s", a}' "$log" 2>/dev/null)
+  after=$(gawk '/^[^ ]+ session=[0-9]+ (start|end) /{a=""; next} {a = a $0 "\n"} END {printf "%s", a}' "$log" 2>/dev/null)
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) .*/\1/p' <<<"$lastl")
   stream=$rel/sessions/$n.jsonl
   local ndone blk open
@@ -131,7 +131,7 @@ state_of() { # <repo> [run] -> st label stream info[]
   ctx=$(grep -oE 'peak_ctx=[0-9]+' <<<"$endl" | cut -d= -f2)
   work=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | grep -vc ' exit=WAIT ')
   hist=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | tail -12 | sed -nE 's/.* exit=([A-Za-z]+).*/\1/p' |
-    awk -v g="$GRN" -v r="$RED" -v d="$DIM" -v z="$R" '
+    gawk -v g="$GRN" -v r="$RED" -v d="$DIM" -v z="$R" '
       { c = $1 == "NEXT" ? g "N" : $1 == "WAIT" ? d "W" : $1 == "DONE" ? g "D" : $1 == "STOP" ? r "S" : $1 == "limit" ? r "L" : $1 == "killed" ? r "K" : r "✗"
         printf "%s%s ", c, z }')
   br=$(git --no-optional-locks -C "$repo" branch --show-current 2>/dev/null)
@@ -161,7 +161,6 @@ pane_frame() { # <cols> <lines> <focus>; uses body[] total off sub think compact
   ((focus)) && lab="◆ $lab"
   {
     printf '\033[%s;30;1m %s%*s\033[0m\n' "$bg" "$lab" "$cols" ''
-    info[0]=${info[0]:0:cols-3}
     for l in "${info[@]}"; do printf '\033[%sm▌\033[0m %s\n' "$c" "$l"; done
     printf '\033[%sm▌\033[0m \033[2m%s\033[0m\n' "$c" "$(printf '%*s' $((cols - 3 - ${#flags})) '' | tr ' ' '-') $flags"
     for ((i = start; i < start + h && i < total; i++)); do printf '\033[%sm▌\033[0m %s\n' "$c" "${body[i]}"; done
@@ -230,7 +229,7 @@ if ((once)); then
 fi
 
 screen_on
-off=0 total=0 rsig='' prev=0 body=() k='' rest='' nsub=0 focus=0 h=0
+off=0 total=0 rsig='' prev=0 body=() k='' c='' nsub=0 focus=1 h=0
 while :; do
   cols=$(tput cols) lines=$(tput lines)
   state_of "$repo" "$run"
@@ -250,7 +249,12 @@ while :; do
   draw "$(pane_frame "$cols" "$lines" "$focus")"
   k=
   read -rsn1 -t 2 k
-  if [ "$k" = $'\033' ]; then read -rsn4 -t 0.01 rest; k=$k$rest; fi
+  if [ "$k" = $'\033' ]; then
+    while read -rsn1 -t 0.01 c; do
+      k+=$c
+      ((${#k} > 2)) && [[ $c == [A-Za-z~] ]] && break
+    done
+  fi
   case $k in
     s) sub=$((1 - sub)) ;; t) think=$((1 - think)) ;; x) compact=$((1 - compact)) ;;
     k | $'\033[A') off=$((off + 3)) ;; j | $'\033[B') off=$((off - 3)) ;;

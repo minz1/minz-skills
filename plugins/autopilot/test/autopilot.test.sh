@@ -294,7 +294,6 @@ test_dash_quoting() {
   tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "it's \$(touch pwned) repo" || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
   tmux -L autopilot-dash kill-server
 }
-test_watch_once_via_cli() { setup; bash "$DIR/../bin/autopilot-watch" --once --width 60 --height 8 "$repo" | grep -q 'repo · ' || die "no header"; }
 test_session_name_sanitized() {
   setup my.repo; start_run
   tmux has-session -t "=autopilot-my_repo" 2>/dev/null || die "no session autopilot-my_repo"
@@ -372,6 +371,14 @@ test_stray_file_and_empty_note() {
   has "$(cat "$R2/owner.md")" "--now x" owner.md
 }
 
+test_dash_spaced_repo_from_start() {
+  setup "my repo"; start_run
+  TMUX=x ap dash; eq "$RC" 0 rc
+  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
+  sleep 2; tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "my repo · " || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
+  tmux -L autopilot-dash kill-server
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -409,7 +416,6 @@ out=$(test_usage_lists_dash_watch 2>/dev/null); t test_usage_lists_dash_watch "$
 out=$(test_dash_without_runs 2>/dev/null); t test_dash_without_runs "$out" $?
 out=$(test_dash_builds_panes 2>/dev/null); t test_dash_builds_panes "$out" $?
 out=$(test_dash_quoting 2>/dev/null); t test_dash_quoting "$out" $?
-out=$(test_watch_once_via_cli 2>/dev/null); t test_watch_once_via_cli "$out" $?
 out=$(test_session_name_sanitized 2>/dev/null); t test_session_name_sanitized "$out" $?
 out=$(test_exact_session_match 2>/dev/null); t test_exact_session_match "$out" $?
 out=$(test_exact_match_without_exact_session 2>/dev/null); t test_exact_match_without_exact_session "$out" $?
@@ -417,5 +423,6 @@ out=$(test_status_ignores_session_in_detail 2>/dev/null); t test_status_ignores_
 out=$(test_start_runner_refuses 2>/dev/null); t test_start_runner_refuses "$out" $?
 out=$(test_start_env_scrubbed 2>/dev/null); t test_start_env_scrubbed "$out" $?
 out=$(test_stray_file_and_empty_note 2>/dev/null); t test_stray_file_and_empty_note "$out" $?
+out=$(test_dash_spaced_repo_from_start 2>/dev/null); t test_dash_spaced_repo_from_start "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

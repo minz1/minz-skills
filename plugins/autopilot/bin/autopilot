@@ -25,8 +25,8 @@ esac
 bin=$(dirname "$(readlink -f "$0")")
 
 if [ "$cmd" = dash ]; then
-  T() { env -u TMUX tmux -L autopilot-dash "$@"; }
-  mapfile -t repos < <(env -u TMUX tmux list-sessions -F '#{session_name} #{session_path}' 2>/dev/null | awk '$1 ~ /^autopilot-/ { sub(/^[^ ]+ /, ""); print }')
+  T() { env -u TMUX tmux -f /dev/null -L autopilot-dash "$@"; }
+  mapfile -t repos < <(env -u TMUX tmux list-sessions -f '#{m:autopilot-*,#{session_name}}' -F '#{session_path}' 2>/dev/null)
   [ ${#repos[@]} -gt 0 ] || fail "no autopilot-* tmux sessions running"
   T kill-server 2>/dev/null
   for _ in $(seq 20); do T has-session 2>/dev/null || break; sleep 0.1; done
