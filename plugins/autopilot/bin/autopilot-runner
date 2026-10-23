@@ -30,9 +30,12 @@ idx=$(mktemp -u)
 
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$run/runner.log"; }
 notify() {
-  local h=$HOME/.config/autopilot/notify
+  local h=$HOME/.config/autopilot/notify d
+  d=$(printf '%s' "$2" | tr '\t\n' '  ' | clean)
+  d=${d:0:200}
+  log "notify $1: $d"
   [ -x "$h" ] || return 0
-  setsid timeout 60 "$h" "$repo_name" "$(basename "$run")" "$1" "$2" </dev/null >/dev/null 2>&1 &
+  setsid timeout 60 "$h" "$repo_name" "$(basename "$run")" "$1" "$d" </dev/null >/dev/null 2>&1 &
 }
 
 blocked_key() { [[ $1 =~ ^-\ \[(!!?)\]\ *([0-9]+) ]] && echo "${BASH_REMATCH[2]}${BASH_REMATCH[1]}" || echo "$1"; }
@@ -48,7 +51,7 @@ notify_owner() {
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     grep -qxF -- "$l" <<<"$pre_owner" && continue
-    notify owner "${l:0:200}"
+    notify owner "$l"
     return
   done < <(owner_lines)
 }
@@ -57,7 +60,7 @@ notify_blocked() {
   local l
   while IFS= read -r l; do
     grep -qxF -- "$(blocked_key "$l")" <<<"$pre_blocked" && continue
-    notify blocked "${l:0:200}"
+    notify blocked "$l"
     return
   done < <(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null)
 }

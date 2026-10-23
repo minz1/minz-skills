@@ -58,7 +58,8 @@ log_has() { grep -qF -- "$1" "$LOG" || die "runner.log lacks '$1': $(cat "$LOG")
 log_lacks() { ! grep -qF -- "$1" "$LOG" || die "runner.log has '$1'"; }
 exits() { grep -o ' end exit=[A-Za-z]*' "$LOG" | sed 's/.*exit=//' | paste -sd' '; }
 stopped() {
-  [[ $(tail -1 "$LOG") == *"stopped: $1" ]] || die "runner.log does not end 'stopped: $1': $(tail -1 "$LOG")"
+  [[ $(tail -2 "$LOG" | head -1) == *"stopped: $1" ]] || die "runner.log's stop line is not 'stopped: $1': $(tail -2 "$LOG")"
+  [[ $(tail -1 "$LOG") == *" notify stopped: "* ]] || die "runner.log does not end with the notify line: $(tail -1 "$LOG")"
   eq "$(tail -1 "$RUN/log.md")" "stopped: $1" "log.md last line"
   ! grep -q '^stopped:' "$PLAN" || die "plan.md has a stopped line"
 }
@@ -291,6 +292,22 @@ hook() {
   chmod +x "$HOME/.config/autopilot/notify"
 }
 notified() { cat "$W/notified" 2>/dev/null; }
+test_notify_logged_without_hook() {
+  setup; sc 1 "$DONE"; go; stopped "done"
+  [[ $(tail -1 "$LOG") =~ ^[^\ ]+\ notify\ stopped:\ done$ ]] || die "last line: $(tail -1 "$LOG")"
+}
+test_notify_detail_capped_everywhere() {
+  setup; local long l d; long=$(printf 'y%.0s' $(seq 300))
+  printf -- '- [ ] 3. \033[31m%s\a\n' "$long" >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^- \\[ \\] 3\\./- [!] 3./\" .autopilot/runs/t/plan.md"}'
+  sc 2 "AUTOPILOT: STOP $long"; go
+  for ev in blocked stopped; do
+    l=$(grep -E "^[^ ]+ notify $ev: " "$LOG") || die "no notify $ev line: $(cat "$LOG")"
+    d=${l#* notify "$ev": }
+    eq "${#d}" 200 "$ev detail length"
+    ! grep -qP '[\x00-\x08\x0b-\x1f\x7f]' <<<"$d" || die "$ev detail has control chars"
+  done
+}
 test_notify_stopped() {
   setup; hook; sc 1 "$DONE"; go
   waitfor "$W/notified" "repo t stopped done"
@@ -845,6 +862,8 @@ out=$(test_kill_signal_named 2>/dev/null); t test_kill_signal_named "$out" $?
 out=$(test_stop_posts_to_own_board 2>/dev/null); t test_stop_posts_to_own_board "$out" $?
 out=$(test_stop_no_board_no_file 2>/dev/null); t test_stop_no_board_no_file "$out" $?
 out=$(test_notify_stopped 2>/dev/null); t test_notify_stopped "$out" $?
+out=$(test_notify_logged_without_hook 2>/dev/null); t test_notify_logged_without_hook "$out" $?
+out=$(test_notify_detail_capped_everywhere 2>/dev/null); t test_notify_detail_capped_everywhere "$out" $?
 out=$(test_notify_blocked_new_only 2>/dev/null); t test_notify_blocked_new_only "$out" $?
 out=$(test_notify_blocked_revisit 2>/dev/null); t test_notify_blocked_revisit "$out" $?
 out=$(test_notify_blocked_detail_capped 2>/dev/null); t test_notify_blocked_detail_capped "$out" $?

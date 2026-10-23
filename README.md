@@ -28,9 +28,10 @@ Runs a queue of work unattended, one fresh Claude session per item, so context s
 /autopilot status          progress, current item, usage
 /autopilot note "..."      change course; the next session applies it
 /autopilot stop [--now]    stop after the current session, or right away
-/autopilot dash            every running run in one tmux grid with the board;
-                           then attach from a terminal: tmux -L autopilot-dash attach
+/autopilot launcher        put an `autopilot` command in ~/.local/bin
 ```
+
+To watch everything at once, run `autopilot dash` in a terminal. It shows every run you've started (or added with `autopilot register` in its repo), live: what each session is doing right now, a feed of what happened since you last looked, the owner items waiting on you, and how fast weekly usage is going. You can answer an owner item, send a note, or start and stop a run from there without asking Claude. The dash needs [uv](https://docs.astral.sh/uv/); the first start downloads Textual, so it takes a few seconds.
 
 Each repo needs `.autopilot/rules.md`: the checks, what may be pushed or deployed mid-run, and what must stop the run. `/autopilot plan` drafts it with you the first time. Runs live in `.autopilot/runs/`, which `plan` adds to `.gitignore`.
 
