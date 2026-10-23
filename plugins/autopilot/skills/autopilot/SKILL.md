@@ -7,13 +7,13 @@ description: Use for /autopilot, "autopilot plan", "start an autonomous run" or 
 
 Arguments: $ARGUMENTS
 
-Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`, `watch`, `dash`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop|watch|dash` and do nothing more.
+Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`, `dash`, `register`, `launcher`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop|dash|register|launcher` and do nothing more.
 
 Templates are in `${CLAUDE_PLUGIN_ROOT}/skills/autopilot/templates/` (`plan.md`, `rules.md`).
 
-## start, status, note, stop, watch, dash
+## start, status, note, stop, dash, register, launcher
 
-Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged. `dash` and `watch` are interactive terminal panes: for `dash`, run it with `TMUX=x` in front so it builds the grid without attaching, then tell the owner to run `tmux -L autopilot-dash attach` in a terminal; for `watch`, give the owner the command `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" watch` (with the path expanded) to run in a terminal from the repo.
+Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged. `dash` is an interactive terminal app, so don't run it here: tell the owner to run `autopilot dash` in a terminal, after `/autopilot launcher` if `autopilot` is not on their PATH yet. `launcher` installs that command as `~/.local/bin/autopilot`; the dash needs `uv`.
 
 ## plan
 
@@ -26,7 +26,7 @@ Interactive, with the owner, one step at a time. Never start the runner.
 4. Queue: draft items from the mandate's sources, each with a check; group small items into batches; mark `after:` dependencies; confirm the Final item. Resolve every SHA a check names against `HEAD` and ask the owner when they differ. Use `templates/plan.md`.
 5. Limits: show current weekly and 5-hour utilization from the last `end` line of the repo's latest `runner.log`. If there is none, run `claude -p "reply ok" --model haiku --output-format stream-json --verbose`. Read the last `rate_limit_event` that has `unifiedWindows`: its `seven_day.utilization` and `five_hour.utilization`. Set the weekly ceiling and session cap. List the live runners (`pgrep -af autopilot-runner`) and their ceilings: usage is account-wide, and `~/.config/autopilot/weekly-ceiling` (a fraction), if present, caps every run. Write `weekly-ceiling` as a decimal fraction (`0.80`, not `80%`) and `session-cap` as a whole number; the run card shows the ceiling as a percent. Save the plan as `.autopilot/runs/<run>/plan.md`.
 6. Review: show the finished plan; the owner approves or edits.
-7. Finish: add `.autopilot/runs/` to `.gitignore` if missing, and print the run card. Plan mode does not start the runner.
+7. Finish: add `.autopilot/runs/` to `.gitignore` if missing, run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" register` from the repo so `autopilot dash` shows the run, and print the run card. Plan mode does not start the runner.
 
 Run card (fill in repo, scope, item count, ceiling and tmux name):
 
@@ -40,9 +40,9 @@ Run 2026-10-21 in batmanROTJ is ready (open scope, 4 items, ceiling 80%).
   /autopilot stop --now        stop immediately (the next start recovers)
   /autopilot plan              revise the plan (before starting, or after a stop)
 
-  /autopilot dash              every live run in one tmux grid, with the board
+  /autopilot launcher          install the autopilot command, for the dash
 
-  From a terminal: tmux -L autopilot-dash attach                 the dash grid
+  From a terminal: autopilot dash                                every run, the feed and owner items
                    tmux attach -t '=autopilot-batmanROTJ'        the raw runner
                    tmux kill-session -t '=autopilot-batmanROTJ'  emergency stop
 ```
@@ -94,7 +94,7 @@ States: `[ ]` open, `[c]` committed locally, `[p]` pushed or posted and waiting 
 
 ## Owner decisions
 
-- `## Owner` in `plan.md` lists what only the owner can do or allow, and every major finding you won't fix. Add lines; never drop one silently. When an entry is resolved (an owner note decides it, or you check and the condition is gone, such as a stuck CI run the owner cancelled), remove its line and append `owner item resolved: <short> (<note N, or what you checked>)` to `log.md`; the dashboard and status show the section's count, so a stale line keeps the run marked as needing the owner.
+- `## Owner` in `plan.md` lists what only the owner can do or allow, and every major finding you won't fix. Add lines; never drop one silently. When an entry is resolved (an owner note decides it, or you check and the condition is gone, such as a stuck CI run the owner cancelled), remove its line and append `owner item resolved <UTC>Z: <short> (<note N, or what you checked>)` to `log.md`, stamped with `date -u +%FT%TZ`; the dashboard and status show the section's count, so a stale line keeps the run marked as needing the owner.
 - A note that explicitly changes an earlier decision is applied (step 3). If applying a note would also undo an owner decision or setting the note does not mention, exit `STOP` and name both. Never label a consequence of a note "owner's decision".
 - A note marked `[to <peer>]` was sent to that peer (`autopilot note --to`); it is not an instruction for this repo.
 - A deviation from an approved design: `deviated: <why>` on the item and a line in `## Owner`.

@@ -51,7 +51,14 @@ test_review_rules() {
 
 test_wait_ack_documented() { in_skill 'WAIT ack <id>' 'There is no timer' 'ack-timeout'; }
 
-test_owner_entries_resolved() { in_skill 'When an entry is resolved' 'owner item resolved:'; }
+test_owner_entries_resolved() { in_skill 'When an entry is resolved' 'owner item resolved <UTC>Z:' 'date -u +%FT%TZ'; }
+test_dash_launcher_register() {
+  in_skill "\`stop\`, \`dash\`, \`register\`, \`launcher\`" 'usage: /autopilot plan|continue|wrapup|start|status|note|stop|dash|register|launcher' \
+    "run \`autopilot dash\` in a terminal" '/autopilot launcher' 'bin/autopilot" register' 'autopilot dash '
+  local k; for k in 'tmux -L autopilot-dash' 'TMUX=x' '|watch' "\`watch\`" 'owner item resolved:'; do
+    ! grep -qF -- "$k" "$SKILL" || die "SKILL.md still has '$k'"
+  done
+}
 
 fail=0
 t() {
@@ -74,5 +81,6 @@ out=$(test_templates 2>/dev/null); t test_templates "$out" $?
 out=$(test_review_rules 2>/dev/null); t test_review_rules "$out" $?
 out=$(test_wait_ack_documented 2>/dev/null); t test_wait_ack_documented "$out" $?
 out=$(test_owner_entries_resolved 2>/dev/null); t test_owner_entries_resolved "$out" $?
+out=$(test_dash_launcher_register 2>/dev/null); t test_dash_launcher_register "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
