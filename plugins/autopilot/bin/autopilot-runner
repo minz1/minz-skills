@@ -9,11 +9,15 @@ cd "$repo" || exit 1
 
 child=
 wd=
+woke=
+board_streak=0
+streak_told=
 pre_blocked=
 board_dir=
 repo_name=$(basename "$repo")
 declare -A base_board=()
 running=
+unset AP_RUNNER AP_REPO AP_REL
 exec_path=${AUTOPILOT_RESUME_MODE:+1}
 mode=${AUTOPILOT_RESUME_MODE:-continue}
 reason=${AUTOPILOT_RESUME_REASON:-}
@@ -30,10 +34,9 @@ notify() {
 
 blocked_key() { [[ $1 =~ ^-\ \[(!!?)\]\ *([0-9]+) ]] && echo "${BASH_REMATCH[2]}${BASH_REMATCH[1]}" || echo "$1"; }
 
-blocked_keys() {
-  local l
-  while IFS= read -r l; do blocked_key "$l"; done < <(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null)
-}
+alive() { { kill -0 "$1" || [ -d "/proc/$1" ]; } 2>/dev/null; }
+
+clean() { tr -d '\000-\010\013-\037\177'; }
 
 notify_blocked() {
   local l
@@ -45,9 +48,9 @@ notify_blocked() {
 }
 
 watchdog() {
-  local every=${AUTOPILOT_STALL_EVERY:-60} after=${AUTOPILOT_STALL_AFTER:-3900} fired= m now sp=
+  local every=${AUTOPILOT_STALL_EVERY:-60} after=${AUTOPILOT_STALL_AFTER:-3900} fired='' m now sp=''
   trap 'kill $sp 2>/dev/null; exit 0' TERM
-  while :; do
+  while kill -0 $$ 2>/dev/null; do
     sleep "$every" &
     sp=$!
     wait "$sp"
@@ -79,7 +82,7 @@ self_upgrade() {
   while IFS= read -r p; do
     r=$(readlink -f "$p") || continue
     [[ $r == "${vdir%/*}/"* ]] && new=$r && break
-  done < <(jq -r '.plugins[]?[]? | .installPath? // empty' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
+  done < <(jq -r '.plugins[]?[]? | select(.scope? == "user") | .installPath? // empty' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
   [ -n "$new" ] && [ "$new" != "$vdir" ] && [ -f "$new/bin/autopilot-runner" ] || return 0
   if ! bash -n "$new/bin/autopilot-runner" 2>/dev/null; then
     [ "$skipped_upgrade" = "$new" ] || log "upgrade skipped: $new fails bash -n"
@@ -175,7 +178,8 @@ wake_check() {
   local p f cur b
   wake=
   [ "$(count_notes)" -le "${base_notes:-0}" ] || { wake=note; return; }
-  for p in $wait_pids; do kill -0 "$p" 2>/dev/null || { wake="pid:$p"; return; }; done
+  for p in $wait_pids; do alive "$p" || { wake="pid:$p"; return; }; done
+  [ "$1" = full ] || return 0
   while IFS= read -r f; do
     cur=$(wc -l < "$f") b=${base_board[$f]:-0}
     ((cur >= b)) || b=0
@@ -186,10 +190,10 @@ wake_check() {
 }
 
 nap() {
-  local total=$1 mode=$2 el=0 r= s
+  local total=$1 mode=$2 el=0 r='' s
   while :; do
     if [ -e "$run/STOP" ]; then r=stop
-    elif [ "$mode" = full ]; then wake_check; r=$wake
+    elif [ "$mode" != limit ]; then wake_check "$mode"; r=$wake
     fi
     [ -z "$r" ] || break
     ((el < total)) || { r=timeout; break; }
@@ -198,6 +202,7 @@ nap() {
     el=$((el + s))
   done
   log "woke reason=$r after=${el}s"
+  woke=$r
 }
 
 checkpoint() {
@@ -225,7 +230,7 @@ parse_word() {
       [ -n "$rest" ] || return
       if [[ $rest =~ ^pid=([0-9]+(,[0-9]+)*)$ ]]; then
         for p in ${BASH_REMATCH[1]//,/ }; do
-          if kill -0 "$p" 2>/dev/null; then wait_pids+=" $p"; else log "pid $p not found at wait start"; fi
+          if alive "$p"; then wait_pids+=" $p"; else log "pid $p not found at wait start"; fi
         done
         wait_pids=${wait_pids# }
         [ -z "$wait_pids" ] || detail+=" pid=${wait_pids// /,}"
@@ -234,6 +239,11 @@ parse_word() {
       fi
       ;;
   esac
+}
+
+ended_with_live_tasks() {
+  jq -se '(to_entries | map(select(.value.type == "assistant" and .value.parent_tool_use_id == null)) | last | .key // -1) as $la
+    | [.[$la + 1:][] | select(.type == "system" and .subtype == "task_notification" and .status == "stopped")] | length > 0' "$1" >/dev/null 2>&1
 }
 
 resume_wait() {
@@ -277,7 +287,7 @@ while :; do
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
   stream=$run/sessions/$n.jsonl
   snapshot
-  pre_blocked=$(blocked_keys)
+  pre_blocked=$(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null | while IFS= read -r l; do blocked_key "$l"; done)
   CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
   child=$!
   watchdog "$stream" "$n" </dev/null >/dev/null 2>&1 &
@@ -304,11 +314,12 @@ while :; do
     kind=limit detail=$ltype
   else
     parse_word
+    [ "$kind" != crash ] || ! ended_with_live_tasks "$stream" || kind=nowait
   fi
   running=
   notify_blocked
   log "session=$n end exit=$kind detail=\"${detail//\"/\'}\" weekly=${weekly:-?} five_hour=${five:-?} peak_ctx=${peak:-0}"
-  printf '%s\n' "$text"
+  printf '%s\n' "$text" | clean
 
   case $kind in
     limit)
@@ -316,12 +327,11 @@ while :; do
       wait_s=$((lreset - $(date +%s)))
       [ "$wait_s" -ge 60 ] || wait_s=60
       nap "$wait_s" limit
-      [ ! -e "$run/STOP" ] || stop "stop file"
       continue
       ;;
     DONE) stop "${reason:-done}" ;;
     STOP) stop "owner needed: $detail" ;;
-    crash)
+    crash | nowait)
       crashes=$((crashes + 1))
       [ "$crashes" -lt 2 ] || stop "two crashes"
       continue
@@ -333,5 +343,16 @@ while :; do
   if [ "${weekly:-?}" != '?' ] && awk -v a="$weekly" -v b="$ceiling" 'BEGIN { exit !(a + 0 >= b + 0) }'; then
     reason="weekly usage $weekly" mode=wrapup
   fi
-  [ "$kind" != WAIT ] || nap $((${detail%% *} * 60)) full
+  if [ "$kind" = WAIT ]; then
+    if ((board_streak >= 10)); then
+      [ -n "$streak_told" ] || notify stalled "$board_streak board-woken waits in a row; board wake paused until a work session"
+      streak_told=1
+      nap $((${detail%% *} * 60)) noboard
+    else
+      nap $((${detail%% *} * 60)) full
+    fi
+    if [[ $woke == board:* ]]; then board_streak=$((board_streak + 1)); else board_streak=0; fi
+  else
+    board_streak=0 streak_told=''
+  fi
 done

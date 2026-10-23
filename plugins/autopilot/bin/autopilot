@@ -59,7 +59,8 @@ case $cmd in
     before=$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)
     env "${unsets[@]}" \
       tmux new-session -d -s "$sess" -c "$repo" "${envs[@]}" \
-      "$(printf '%q ' bash "$bin/autopilot-runner" "$repo" "$rel")" || fail "tmux could not start session $sess"
+      -e "AP_RUNNER=$bin/autopilot-runner" -e "AP_REPO=$repo" -e "AP_REL=$rel" \
+      "exec bash \"\$AP_RUNNER\" \"\$AP_REPO\" \"\$AP_REL\"" || fail "tmux could not start session $sess"
     for _ in $(seq 10); do
       live || break
       [ "$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)" -gt "$before" ] && break
@@ -82,6 +83,7 @@ case $cmd in
     fi
     ;;
   status)
+    {
     plan=$rel/plan.md
     log=$rel/runner.log
     hv() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$plan" | head -1; }
@@ -104,16 +106,17 @@ case $cmd in
       if [ -n "$last" ]; then
         word=$(sed -nE 's/^[^ ]+ session=[0-9]+ end exit=([A-Za-z]*).*/\1/p' <<<"$lastl")
         case $word in
-          killed | crash | limit) state="not running, ${last/=/ } ended dirty ($word)" ;;
+          killed | crash | limit | nowait) state="not running, ${last/=/ } ended dirty ($word)" ;;
           "") state="not running, ${last/=/ } ended dirty (no end line)" ;;
           *) state="not running, ${last/=/ } ended $word" ;;
         esac
       fi
       [ -z "$stopped" ] || state+="; $stopped"
     fi
-    now=$(hv now)
+    nowid=$(hv now)
+    [[ $nowid =~ ^[0-9]+$ ]] || nowid=
     item=
-    [ -z "$now" ] || item=$(grep -m1 -E "^- \[[^]]*\] *$now\." "$plan")
+    [ -z "$nowid" ] || item=$(grep -m1 -E "^- \[[^]]*\] *$nowid\." "$plan")
     [ -n "$item" ] || item=$(grep -m1 '^- \[ \]' "$plan")
     item=$(sed -E 's/^- \[[^]]*\] *//' <<<"$item")
     work=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | grep -vc ' exit=WAIT ')
@@ -137,5 +140,6 @@ case $cmd in
       done
     fi
     ! live || echo "watch: $attach"
+    } | tr -d '\000-\010\013-\037\177'
     ;;
 esac

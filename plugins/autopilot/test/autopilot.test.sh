@@ -148,7 +148,7 @@ test_stop_now_logs_owner() {
   tmux_gone autopilot-repo; waitfor "$LOG" "exit=killed"
   local o k
   o=$(grep -n 'stop --now by owner' "$LOG" | cut -d: -f1); k=$(grep -n 'exit=killed' "$LOG" | cut -d: -f1)
-  [ -n "$o" ] && [ "$o" -lt "$k" ] || die "order: $(cat "$LOG")"
+  if [ -z "$o" ] || [ "$o" -ge "$k" ]; then die "order: $(cat "$LOG")"; fi
 }
 
 test_status_live() {
@@ -199,7 +199,7 @@ test_status_waiting_until() {
   setup; sc 1 "AUTOPILOT: DONE"
   local t; t=$(date +%s)
   tmux new-session -d -s autopilot-repo 'sleep 600'
-  printf '%s session=3 start mode=continue checkpoint=x\n%s session=3 end exit=WAIT detail="20 pid=77" weekly=0.1 five_hour=0.1 peak_ctx=1\n' "$(date -u -d @$t +%FT%TZ)" "$(date -u -d @$t +%FT%TZ)" > "$LOG"
+  printf '%s session=3 start mode=continue checkpoint=x\n%s session=3 end exit=WAIT detail="20 pid=77" weekly=0.1 five_hour=0.1 peak_ctx=1\n' "$(date -u -d "@$t" +%FT%TZ)" "$(date -u -d "@$t" +%FT%TZ)" > "$LOG"
   ap status
   has "$OUT" "waiting until $(date -u -d @$((t + 1200)) +%FT%TZ) (WAIT 20 from session 3, pids 77)" status
 }
@@ -255,6 +255,16 @@ test_start_passes_no_upgrade() {
   ! grep -qx AUTOPILOT_RESUME_MODE <<<"$s" || die "RESUME leaked"
   g=$(tmux show-environment -g | cut -d= -f1)
   ! grep -qx AUTOPILOT_RESUME_MODE <<<"$g" || die "RESUME in global env"
+}
+test_start_quoting() {
+  setup "it's \$(touch pwned) r"; sc 1 "AUTOPILOT: DONE"; ap start
+  eq "$RC" 0 rc; waitfor "$LOG" "stopped: done"
+  if [ -e "$W/pwned" ] || [ -e "$repo/pwned" ]; then die "injection ran"; fi
+}
+test_status_cleans_control_chars() {
+  setup; printf -- '- [ ] 1. a\033]0;t\007b\n## Handoff\nh\033[2Jx\n' >> "$R2/plan.md"; printf 'now: x[\n' >> "$R2/plan.md"
+  ap status
+  ! grep -qP '\x1b|\x07' <<<"$OUT" || die "control chars in status"; eq "$ERR" "" stderr; has "$OUT" "now: 1. a]0;tb" now
 }
 test_session_name_sanitized() {
   setup my.repo; start_run
@@ -337,5 +347,41 @@ fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
 }
-for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do out=$($f 2>/dev/null); t "$f" "$out" $?; done
+out=$(test_latest_run_default 2>/dev/null); t test_latest_run_default "$out" $?
+out=$(test_run_flag 2>/dev/null); t test_run_flag "$out" $?
+out=$(test_from_subdir 2>/dev/null); t test_from_subdir "$out" $?
+out=$(test_note_format 2>/dev/null); t test_note_format "$out" $?
+out=$(test_no_run_errors 2>/dev/null); t test_no_run_errors "$out" $?
+out=$(test_env_forwarded 2>/dev/null); t test_env_forwarded "$out" $?
+out=$(test_start_twice_refuses 2>/dev/null); t test_start_twice_refuses "$out" $?
+out=$(test_start_clears_stop 2>/dev/null); t test_start_clears_stop "$out" $?
+out=$(test_stop_creates_stop 2>/dev/null); t test_stop_creates_stop "$out" $?
+out=$(test_stop_nothing_running 2>/dev/null); t test_stop_nothing_running "$out" $?
+out=$(test_stop_now_kills 2>/dev/null); t test_stop_now_kills "$out" $?
+out=$(test_stop_now_logs_owner 2>/dev/null); t test_stop_now_logs_owner "$out" $?
+out=$(test_status_live 2>/dev/null); t test_status_live "$out" $?
+out=$(test_status_dirty 2>/dev/null); t test_status_dirty "$out" $?
+out=$(test_status_counts 2>/dev/null); t test_status_counts "$out" $?
+out=$(test_status_details 2>/dev/null); t test_status_details "$out" $?
+out=$(test_status_running_session 2>/dev/null); t test_status_running_session "$out" $?
+out=$(test_status_waiting_until 2>/dev/null); t test_status_waiting_until "$out" $?
+out=$(test_status_woke_is_running 2>/dev/null); t test_status_woke_is_running "$out" $?
+out=$(test_status_stopped_reason 2>/dev/null); t test_status_stopped_reason "$out" $?
+out=$(test_status_now_and_fallback 2>/dev/null); t test_status_now_and_fallback "$out" $?
+out=$(test_status_sessions_and_notes 2>/dev/null); t test_status_sessions_and_notes "$out" $?
+out=$(test_status_full_handoff 2>/dev/null); t test_status_full_handoff "$out" $?
+out=$(test_status_board_lines 2>/dev/null); t test_status_board_lines "$out" $?
+out=$(test_status_repo_with_space 2>/dev/null); t test_status_repo_with_space "$out" $?
+out=$(test_note_utc_and_confirm 2>/dev/null); t test_note_utc_and_confirm "$out" $?
+out=$(test_start_passes_no_upgrade 2>/dev/null); t test_start_passes_no_upgrade "$out" $?
+out=$(test_start_quoting 2>/dev/null); t test_start_quoting "$out" $?
+out=$(test_status_cleans_control_chars 2>/dev/null); t test_status_cleans_control_chars "$out" $?
+out=$(test_session_name_sanitized 2>/dev/null); t test_session_name_sanitized "$out" $?
+out=$(test_exact_session_match 2>/dev/null); t test_exact_session_match "$out" $?
+out=$(test_exact_match_without_exact_session 2>/dev/null); t test_exact_match_without_exact_session "$out" $?
+out=$(test_status_ignores_session_in_detail 2>/dev/null); t test_status_ignores_session_in_detail "$out" $?
+out=$(test_start_runner_refuses 2>/dev/null); t test_start_runner_refuses "$out" $?
+out=$(test_start_env_scrubbed 2>/dev/null); t test_start_env_scrubbed "$out" $?
+out=$(test_stray_file_and_empty_note 2>/dev/null); t test_stray_file_and_empty_note "$out" $?
+for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
