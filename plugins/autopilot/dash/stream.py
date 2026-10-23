@@ -76,6 +76,7 @@ class StreamReader:
         """Start with no stream."""
         self.path: Path | None = None
         self.events: list[Event] = []
+        self.total = 0
         self.offset = 0
         self.rest = b""
 
@@ -83,12 +84,12 @@ class StreamReader:
         """Read what was added to the stream since the last call."""
         result: Literal["same", "appended", "reset"] = "same"
         if path != self.path:
-            self.path, self.events, self.offset, self.rest = path, [], 0, b""
+            self.path, self.events, self.total, self.offset, self.rest = path, [], 0, 0, b""
             result = "reset"
         try:
             with path.open("rb") as f:
                 if f.seek(0, 2) < self.offset:
-                    self.events, self.offset, self.rest, result = [], 0, b"", "reset"
+                    self.events, self.total, self.offset, self.rest, result = [], 0, 0, b"", "reset"
                 f.seek(self.offset)
                 chunk = f.read()
         except OSError:
@@ -99,6 +100,7 @@ class StreamReader:
         if not new:
             return result
         self.events = (self.events + new)[-CAP:]
+        self.total += len(new)
         return "reset" if result == "reset" else "appended"
 
 

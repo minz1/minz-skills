@@ -34,6 +34,7 @@ def test_incremental(tmp_path: Path) -> None:
         f.write(text("b") + text("c"))
     assert r.update(p) == "appended"
     assert [e.text for e in r.events] == ["a", "b", "c"]
+    assert r.total == 3
 
 
 def test_partial_line(tmp_path: Path) -> None:
@@ -127,6 +128,7 @@ def test_cap_500(tmp_path: Path) -> None:
     r.update(p)
     assert len(r.events) == 500
     assert r.events[0].text == "100"
+    assert r.total == 600
 
 
 def test_session_result(tmp_path: Path) -> None:
