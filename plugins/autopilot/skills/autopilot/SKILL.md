@@ -94,7 +94,7 @@ States: `[ ]` open, `[c]` committed locally, `[p]` pushed or posted and waiting 
 
 ## Owner decisions
 
-- `## Owner` in `plan.md` lists what only the owner can do or allow, and every major finding you won't fix. Add lines; never drop one silently.
+- `## Owner` in `plan.md` lists what only the owner can do or allow, and every major finding you won't fix. Add lines; never drop one silently. When an entry is resolved (an owner note decides it, or you check and the condition is gone, such as a stuck CI run the owner cancelled), remove its line and append `owner item resolved: <short> (<note N, or what you checked>)` to `log.md`; the dashboard and status show the section's count, so a stale line keeps the run marked as needing the owner.
 - A note that explicitly changes an earlier decision is applied (step 3). If applying a note would also undo an owner decision or setting the note does not mention, exit `STOP` and name both. Never label a consequence of a note "owner's decision".
 - A note marked `[to <peer>]` was sent to that peer (`autopilot note --to`); it is not an instruction for this repo.
 - A deviation from an approved design: `deviated: <why>` on the item and a line in `## Owner`.
