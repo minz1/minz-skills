@@ -88,7 +88,7 @@ test_from_subdir() {
 
 test_note_format() {
   setup; ap note "skip APU"
-  re='^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} skip APU$'
+  re='^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z skip APU$'
   [[ $(cat "$R2/owner.md") =~ $re ]] || die "bad note line: $(cat "$R2/owner.md")"
 }
 
@@ -126,7 +126,7 @@ test_stop_creates_stop() {
   setup; start_run; ap stop
   eq "$RC" 0 "rc"
   [ -e "$R2/STOP" ] || die "no STOP file"
-  has "$OUT" "before its next session starts" stdout
+  has "$OUT" "stops within ~10 s if waiting" stdout
   tmux has-session -t "=autopilot-repo" 2>/dev/null || die "session died after plain stop"
 }
 
@@ -190,6 +190,72 @@ test_status_details() {
   for f in exit=NEXT weekly=0.62 five_hour=0.12 peak_ctx=43005; do has "$OUT" "$f" status; done
 }
 
+ts_ago() { date -u -d "@$(( $(date +%s) - $1 ))" +%FT%TZ; }
+test_status_running_session() {
+  setup; start_run; ap status
+  has "$OUT" "running, session 1 since " status
+}
+test_status_waiting_until() {
+  setup; sc 1 "AUTOPILOT: DONE"
+  local t; t=$(date +%s)
+  tmux new-session -d -s autopilot-repo 'sleep 600'
+  printf '%s session=3 start mode=continue checkpoint=x\n%s session=3 end exit=WAIT detail="20 pid=77" weekly=0.1 five_hour=0.1 peak_ctx=1\n' "$(date -u -d @$t +%FT%TZ)" "$(date -u -d @$t +%FT%TZ)" > "$LOG"
+  ap status
+  has "$OUT" "waiting until $(date -u -d @$((t + 1200)) +%FT%TZ) (WAIT 20 from session 3, pids 77)" status
+}
+test_status_woke_is_running() {
+  setup; tmux new-session -d -s autopilot-repo 'sleep 600'
+  printf '%s session=3 end exit=WAIT detail="20" w\n%s woke reason=board:x after=10s\n' "$(ts_ago 60)" "$(ts_ago 50)" > "$LOG"
+  ap status; lacks "$OUT" "waiting until" status
+}
+test_status_stopped_reason() {
+  setup
+  printf '%s session=1 end exit=STOP detail="x" w\n%s stopped: owner needed: x\n' "$(ts_ago 60)" "$(ts_ago 60)" > "$LOG"
+  ap status; has "$OUT" "stopped: owner needed: x" status
+}
+test_status_now_and_fallback() {
+  setup
+  printf '%s\n' '- [x] 1. a' '- [ ] 2. second' '- [ ] 9. ninth item' >> "$R2/plan.md"
+  ap status; has "$OUT" "now: 2. second" status
+  sed -i '1a now: 9' "$R2/plan.md"; ap status; has "$OUT" "now: 9. ninth item" status
+  printf -- '- [ ] 10. %s\n' "$(printf 'z%.0s' $(seq 300))" >> "$R2/plan.md"; sed -i 's/^now: 9/now: 10/' "$R2/plan.md"
+  ap status; local l; l=$(grep '^now: ' <<<"$OUT"); eq "${#l}" 165 "now line length"
+}
+test_status_sessions_and_notes() {
+  setup
+  for e in NEXT WAIT NEXT WAIT NEXT; do echo "$(ts_ago 999) session=1 end exit=$e detail=\"\" w" >> "$LOG"; done
+  sed -i '1a owner-notes-applied: 4' "$R2/plan.md"
+  for i in 1 2 3 4 5; do echo "- n$i" >> "$R2/owner.md"; done
+  ap status; has "$OUT" "sessions 3/5 · notes 4/5" status
+}
+test_status_full_handoff() {
+  setup; { echo '## Handoff'; for i in $(seq 20); do echo "h$i"; done; } >> "$R2/plan.md"
+  ap status; has "$OUT" "h15" status; lacks "$OUT" "h16" status
+}
+test_status_board_lines() {
+  setup; mkdir -p "$HOME/.autopilot/b"; echo 'board: ~/.autopilot/b/' >> "$R2/plan.md"
+  printf -- '- old\n- p-1 → repo: newest\n' > "$HOME/.autopilot/b/peer.md"
+  ap status; has "$OUT" "board:" status; has "$OUT" "peer  p-1 → repo: newest" status
+}
+test_status_repo_with_space() {
+  setup "my repo"; printf '%s\n' '- [ ] 1. a' >> "$R2/plan.md"; ap status
+  eq "$RC" 0 "rc"; has "$OUT" "now: 1. a" status
+}
+test_note_utc_and_confirm() {
+  setup; ap note one; ap note two
+  has "$OUT" "note 2 added; a waiting run wakes within ~10 s" stdout
+}
+test_start_passes_no_upgrade() {
+  setup; tmux kill-server; tmux_gone bootstrap
+  export AUTOPILOT_NO_UPGRADE=1 AUTOPILOT_STALL_AFTER=5 AUTOPILOT_RESUME_MODE=wrapup
+  start_run
+  s=$(tmux show-environment -t "=autopilot-repo" | cut -d= -f1)
+  grep -qx AUTOPILOT_NO_UPGRADE <<<"$s" || die "no NO_UPGRADE"
+  grep -qx AUTOPILOT_STALL_AFTER <<<"$s" || die "no STALL_AFTER"
+  ! grep -qx AUTOPILOT_RESUME_MODE <<<"$s" || die "RESUME leaked"
+  g=$(tmux show-environment -g | cut -d= -f1)
+  ! grep -qx AUTOPILOT_RESUME_MODE <<<"$g" || die "RESUME in global env"
+}
 test_session_name_sanitized() {
   setup my.repo; start_run
   tmux has-session -t "=autopilot-my_repo" 2>/dev/null || die "no session autopilot-my_repo"
