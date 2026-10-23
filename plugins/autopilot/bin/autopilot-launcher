@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+missing() {
+  echo "autopilot plugin not installed (run: claude plugin install autopilot@minz-skills)" >&2
+  exit 1
+}
+prefix=$(readlink -f -- "$HOME/.claude/plugins/cache/minz-skills/autopilot") || missing
+p=$(jq -r '.plugins["autopilot@minz-skills"][]? | select(.scope? == "user") | .installPath? // empty' \
+  "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null | head -1)
+if [ -z "$p" ] || [ -z "$prefix" ]; then missing; fi
+path=$(readlink -f -- "$p") || missing
+if [[ $path != "$prefix"/?* ]] || [ ! -x "$path/bin/autopilot" ]; then missing; fi
+exec bash "$path/bin/autopilot" "$@"

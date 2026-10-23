@@ -266,33 +266,55 @@ test_status_cleans_control_chars() {
   ap status
   ! grep -qP '\x1b|\x07' <<<"$OUT" || die "control chars in status"; eq "$ERR" "" stderr; has "$OUT" "now: 1. a]0;tb" now
 }
-test_usage_lists_dash_watch() { setup; ap bogus; has "$ERR" "watch|dash" usage; }
-test_dash_without_runs() {
-  setup; TMUX=x ap dash; [ "$RC" != 0 ] || die "rc 0"; has "$ERR" "no autopilot-* tmux sessions" stderr
+test_usage_lists_dash_register_launcher() {
+  setup; ap bogus; eq "$RC" 2 rc
+  has "$ERR" "dash" usage; has "$ERR" "register" usage; has "$ERR" "launcher" usage; lacks "$ERR" "watch" usage
 }
-test_dash_builds_panes() {
-  setup; local other=$W/other; mkdir -p "$other/.autopilot/runs/r"; printf 'weekly-ceiling: 0.8\nsession-cap: 5\n' > "$other/.autopilot/runs/r/plan.md"
-  mkdir -p "$HOME/.autopilot/b"; printf -- '- x-1 → repo: hi\n' > "$HOME/.autopilot/b/x.md"; echo 'board: ~/.autopilot/b/' >> "$R2/plan.md"
-  tmux new-session -d -s autopilot-repo -c "$repo" 'sleep 600'; tmux new-session -d -s autopilot-other -c "$other" 'sleep 600'
-  TMUX=x ap dash
-  eq "$RC" 0 "rc"; has "$OUT" "TMUX= tmux -L autopilot-dash attach" stdout
-  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
-  sleep 2
-  eq "$(tmux -L autopilot-dash list-panes -t =dash | wc -l)" 3 panes
-  tmux -L autopilot-dash list-panes -t =dash -F '#{pane_dead} #{history_limit} #{alternate_on}' | while read -r d h a; do
-    eq "$d $h $a" "0 0 1" "pane state"
-  done
-  local all; all=$(for i in 0 1 2; do tmux -L autopilot-dash capture-pane -p -t "=dash:0.$i"; done)
-  has "$all" "repo · " pane; has "$all" "other · " pane; has "$all" "open: x-1 → repo" board
-  tmux -L autopilot-dash kill-server
+test_watch_is_usage_error() { setup; ap watch; eq "$RC" 2 rc; has "$ERR" "usage:" stderr; }
+test_dash_needs_tty() {
+  setup; ap dash </dev/null; [ "$RC" != 0 ] || die "rc 0"; has "$ERR" "run autopilot dash in a terminal" stderr
 }
-test_dash_quoting() {
-  setup "it's \$(touch pwned) repo"; tmux new-session -d -s autopilot-x -c "$repo" 'sleep 600'
-  TMUX=x ap dash; eq "$RC" 0 rc
-  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
-  sleep 2; if [ -e "$W/pwned" ] || [ -e "$repo/pwned" ]; then die "injection ran"; fi
-  tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "it's \$(touch pwned) repo" || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
-  tmux -L autopilot-dash kill-server
+test_dash_needs_uv() {
+  setup; local out rc
+  out=$(PATH=/usr/bin:/bin script -qec "bash '$AP' dash" /dev/null 2>&1 </dev/null); rc=$?
+  [ "$rc" != 0 ] || die "rc 0: $out"; has "$out" "autopilot dash needs uv: https://docs.astral.sh/uv/" output
+}
+registry() { cat "$HOME/.config/autopilot/repos" 2>/dev/null; }
+test_register_dedupes() {
+  setup; ap register; eq "$RC" 0 rc; eq "$OUT$ERR" "" output
+  (cd "$repo/sub" && bash "$AP" register)
+  eq "$(registry)" "$(git rev-parse --show-toplevel)" registry
+  [ -e "$HOME/.config/autopilot/repos.lock" ] || die "no lock file"
+}
+test_start_registers() {
+  setup; start_run; eq "$(registry)" "$(git rev-parse --show-toplevel)" registry
+}
+test_launcher_installs() {
+  setup; local dest=$HOME/.local/bin/autopilot
+  PATH=/usr/bin:/bin ap launcher; eq "$RC" 0 rc
+  has "$OUT" "$dest" stdout; has "$ERR" "$HOME/.local/bin is not on PATH" stderr
+  [ -x "$dest" ] || die "not executable"; cmp -s "$dest" "$DIR/../bin/autopilot-launcher" || die "differs"
+  PATH=$HOME/.local/bin:$PATH ap launcher; eq "$ERR" "" "stderr with ~/.local/bin on PATH"
+}
+fake_install() { # <key> <scope> <installPath>
+  mkdir -p "$HOME/.claude/plugins" "$3/bin"
+  printf '#!/usr/bin/env bash\necho "OK $*"\n' > "$3/bin/autopilot"; chmod +x "$3/bin/autopilot"
+  jq -n --arg k "$1" --arg s "$2" --arg p "$3" '{plugins: {($k): [{scope: $s, installPath: $p}]}}' > "$HOME/.claude/plugins/installed_plugins.json"
+}
+launch() { OUT=$(bash "$DIR/../bin/autopilot-launcher" "$@" 2>"$W/err"); RC=$?; ERR=$(cat "$W/err"); }
+test_launcher_resolves() {
+  setup; fake_install autopilot@minz-skills user "$HOME/.claude/plugins/cache/minz-skills/autopilot/1.2.3"
+  launch note "a b"; eq "$RC" 0 rc; eq "$OUT" "OK note a b" stdout
+}
+test_launcher_rejects_other_key_and_path() {
+  local cache want="autopilot plugin not installed (run: claude plugin install autopilot@minz-skills)"
+  setup; cache=$HOME/.claude/plugins/cache/minz-skills/autopilot/1.2.3
+  fake_install autopilot@other user "$cache"; launch status; eq "$RC" 1 rc; eq "$ERR" "$want" "other key"
+  fake_install autopilot@minz-skills project "$cache"; launch status; eq "$RC" 1 rc; eq "$ERR" "$want" "project scope"
+  fake_install autopilot@minz-skills user "$W/evil"; launch status; eq "$RC" 1 rc; eq "$ERR" "$want" "outside cache"
+  mkdir -p "$cache"; ln -s "$W/evil" "$cache/link"
+  fake_install autopilot@minz-skills user "$cache/link"; launch status; eq "$RC" 1 rc; eq "$ERR" "$want" "symlink out"
+  rm -f "$HOME/.claude/plugins/installed_plugins.json"; launch status; eq "$RC" 1 rc; eq "$ERR" "$want" "no file"
 }
 test_session_name_sanitized() {
   setup my.repo; start_run
@@ -391,13 +413,6 @@ test_note_warns_done_item() {
   setup; echo '- [x] 3. thing' >> "$R2/plan.md"; ap note "item 3 should change"
   has "$ERR" "warning: item 3 is already done" stderr; has "$(cat "$R2/owner.md")" "item 3 should change" owner.md
 }
-test_dash_spaced_repo_from_start() {
-  setup "my repo"; start_run
-  TMUX=x ap dash; eq "$RC" 0 rc
-  trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
-  sleep 2; tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "my repo · " || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
-  tmux -L autopilot-dash kill-server
-}
 
 test_board_trailing_space() {
   setup; mkdir -p "$HOME/.autopilot/b"; echo 'board: ~/.autopilot/b/  ' >> "$R2/plan.md"; printf -- '- p-1 → repo: hi\n' > "$HOME/.autopilot/b/p.md"
@@ -445,10 +460,15 @@ out=$(test_note_utc_and_confirm 2>/dev/null); t test_note_utc_and_confirm "$out"
 out=$(test_start_passes_no_upgrade 2>/dev/null); t test_start_passes_no_upgrade "$out" $?
 out=$(test_start_quoting 2>/dev/null); t test_start_quoting "$out" $?
 out=$(test_status_cleans_control_chars 2>/dev/null); t test_status_cleans_control_chars "$out" $?
-out=$(test_usage_lists_dash_watch 2>/dev/null); t test_usage_lists_dash_watch "$out" $?
-out=$(test_dash_without_runs 2>/dev/null); t test_dash_without_runs "$out" $?
-out=$(test_dash_builds_panes 2>/dev/null); t test_dash_builds_panes "$out" $?
-out=$(test_dash_quoting 2>/dev/null); t test_dash_quoting "$out" $?
+out=$(test_usage_lists_dash_register_launcher 2>/dev/null); t test_usage_lists_dash_register_launcher "$out" $?
+out=$(test_watch_is_usage_error 2>/dev/null); t test_watch_is_usage_error "$out" $?
+out=$(test_dash_needs_tty 2>/dev/null); t test_dash_needs_tty "$out" $?
+out=$(test_dash_needs_uv 2>/dev/null); t test_dash_needs_uv "$out" $?
+out=$(test_register_dedupes 2>/dev/null); t test_register_dedupes "$out" $?
+out=$(test_start_registers 2>/dev/null); t test_start_registers "$out" $?
+out=$(test_launcher_installs 2>/dev/null); t test_launcher_installs "$out" $?
+out=$(test_launcher_resolves 2>/dev/null); t test_launcher_resolves "$out" $?
+out=$(test_launcher_rejects_other_key_and_path 2>/dev/null); t test_launcher_rejects_other_key_and_path "$out" $?
 out=$(test_session_name_sanitized 2>/dev/null); t test_session_name_sanitized "$out" $?
 out=$(test_exact_session_match 2>/dev/null); t test_exact_session_match "$out" $?
 out=$(test_exact_match_without_exact_session 2>/dev/null); t test_exact_match_without_exact_session "$out" $?
@@ -462,7 +482,6 @@ out=$(test_note_once 2>/dev/null); t test_note_once "$out" $?
 out=$(test_note_to_peer 2>/dev/null); t test_note_to_peer "$out" $?
 out=$(test_note_to_without_board 2>/dev/null); t test_note_to_without_board "$out" $?
 out=$(test_note_warns_done_item 2>/dev/null); t test_note_warns_done_item "$out" $?
-out=$(test_dash_spaced_repo_from_start 2>/dev/null); t test_dash_spaced_repo_from_start "$out" $?
 out=$(test_board_trailing_space 2>/dev/null); t test_board_trailing_space "$out" $?
 out=$(test_status_waiting_for_ack 2>/dev/null); t test_status_waiting_for_ack "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
