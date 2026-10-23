@@ -20,7 +20,7 @@ EXIT = re.compile(r" exit=([A-Za-z]+)")
 WEEKLY = re.compile(r"^(\S+) session=\d+ end .* weekly=([0-9.]+)")
 POST = re.compile(r"^- (?:(\S+Z) )?([A-Za-z0-9_.-]+-[0-9]+)(?: \(replaces ([A-Za-z0-9_.-]+-[0-9]+)\))? → ([^:]+)")
 ANSWER = re.compile(r"^- (?:\S+Z )?(?:(?:ack|nack|reject) )+([A-Za-z0-9_.-]+-[0-9]+)(?![0-9])")
-TAIL = re.compile(r"\s{2,}(after|check|waiting|progress):.*")
+TAIL_START = re.compile(r"\s{2,}(after|check|waiting|progress):")
 STALL_AFTER = 3900
 QUIET_AFTER = 300
 WINDOW = 6 * 3600
@@ -100,13 +100,16 @@ def resolve_runs(registry: list[Path], sessions: dict[str, Path], rel: dict[str,
     repos = list(dict.fromkeys([*registry, *sessions.values()]))
     out = []
     for repo in repos:
-        if not repo.exists():
-            out.append(RunRef(repo, repo / ".autopilot" / "runs", live=False, missing=True))
-            continue
         name = live.get(repo)
         r = rel.get(name) if name else None
-        run_dir = repo / r if r else newest_run(repo)
-        if run_dir is not None:
+        try:
+            run_dir = repo / r if r else newest_run(repo) if repo.exists() else None
+            missing = not repo.exists()
+        except OSError:
+            run_dir, missing = None, True
+        if missing:
+            out.append(RunRef(repo, repo / ".autopilot" / "runs", live=False, missing=True))
+        elif run_dir is not None:
             out.append(RunRef(repo, run_dir, live=name is not None, missing=False))
     return out
 
@@ -236,8 +239,9 @@ def current_item(plan: str) -> str:
     item = ""
     if nowid.isdigit():
         item = next((ln for ln in lines if re.match(rf"^- \[[^]]*\] *{nowid}\.", ln)), "")
-    item = item or next((ln for ln in lines if ln.startswith("- [ ]")), "")
-    return TAIL.sub("", re.sub(r"^- \[[^]]*\] *", "", clean(item)))
+    item = re.sub(r"^- \[[^]]*\] *", "", clean(item or next((ln for ln in lines if ln.startswith("- [ ]")), "")))
+    tail = TAIL_START.search(item)
+    return item[: tail.start()] if tail else item
 
 
 def counts_row(plan: str, log: list[str], n: str, now: float) -> Text:
@@ -382,7 +386,10 @@ def board_of(plan: str, home: Path) -> Path | None:
     if b in ("", "none"):
         return None
     path = home / b[2:] if b.startswith("~/") else Path(b)
-    return path if path.is_dir() else None
+    try:
+        return path if path.is_dir() else None
+    except OSError:
+        return None
 
 
 def burn(runs: list[tuple[RunRef, RunFiles]], global_ceiling: float | None, now: float) -> Text:
@@ -420,7 +427,6 @@ def burn(runs: list[tuple[RunRef, RunFiles]], global_ceiling: float | None, now:
 
 QUEUE_ITEM = re.compile(r"^- \[(x| |c|p|!!?)\] *(\d+\.)?(.*)$")
 QUEUE_MARK = {"x": "green", " ": "", "c": "yellow", "p": "blue", "!": "bold red", "!!": "bold red"}
-TAIL_START = re.compile(r"\s{2,}(after|check|waiting|progress):")
 CODE_STYLE = "bold cyan"
 LOGMD_LINES = 400
 BOARD_LINE = re.compile(r"^- (\S+Z )?(.*)$")

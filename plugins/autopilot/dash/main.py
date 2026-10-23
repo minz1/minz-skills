@@ -5,7 +5,11 @@
 # ///
 """Entry point for autopilot dash."""
 
-import app
+import importlib
+import logging
+import sys
 
 if __name__ == "__main__":
-    app.Dash().run()
+    sys.dont_write_bytecode = True
+    logging.raiseExceptions = False
+    importlib.import_module("app").Dash().run()

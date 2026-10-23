@@ -2,6 +2,7 @@
 """Build and run the autopilot CLI calls behind the dash's actions."""
 
 import asyncio
+import contextlib
 import os
 import signal
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from typing import Literal
 import model
 
 NoteMode = Literal["plain", "once"] | tuple[Literal["to"], str]
-DROPPED = ("VIRTUAL_ENV", "AP_PATH", "AP_BIN", "UV")
+DROPPED = ("VIRTUAL_ENV", "AP_PATH", "AP_BIN", "UV", "TMUX")
 
 
 def note_argv(ap_bin: str, run: str, text: str, mode: NoteMode) -> list[str]:
@@ -28,7 +29,7 @@ def control_argv(ap_bin: str, run: str, what: Literal["start", "stop", "stop-now
 
 
 def action_env(env: Mapping[str, str]) -> dict[str, str]:
-    """Drop uv's venv and the dash's own variables, restoring the caller's PATH."""
+    """Drop uv's venv, the dash's own variables and TMUX, restoring the caller's PATH."""
     out = {k: v for k, v in env.items() if k not in DROPPED and not k.startswith("UV_")}
     if "AP_PATH" in env:
         out["PATH"] = env["AP_PATH"]
@@ -66,7 +67,8 @@ async def run_action(argv: list[str], cwd: Path, env: Mapping[str, str], limit: 
     try:
         out, err = await asyncio.wait_for(proc.communicate(), limit)
     except TimeoutError:
-        os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
         await proc.wait()
         return ActionResult(ok=False, message=f"timed out after {limit:g} s")
     if proc.returncode != 0:

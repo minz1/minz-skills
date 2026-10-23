@@ -47,11 +47,12 @@ def test_control_argv() -> None:
 
 
 def test_env_scrubbed() -> None:
-    """The venv uv made and the dash's own variables don't reach the CLI."""
+    """The venv uv made, the dash's own variables and TMUX don't reach the CLI."""
     env = {
         "VIRTUAL_ENV": "x",
         "UV_RUN_RECURSION_DEPTH": "1",
         "UV": "/x/uv",
+        "TMUX": "/run/tmux/other,1,0",
         "AP_PATH": "/usr/bin",
         "AP_BIN": "/ap",
         "PATH": "/venv/bin:/usr/bin",

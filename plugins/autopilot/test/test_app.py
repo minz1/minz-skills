@@ -3,6 +3,7 @@
 
 import calendar
 import gc
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -10,12 +11,14 @@ from pathlib import Path
 import actions
 import app
 import model
+import probe
 import pytest
 from conftest import MakeRun
 from rich.text import Text
 from textual.pilot import Pilot
 from textual.widgets import (
     Button,
+    ContentSwitcher,
     Input,
     Label,
     ListView,
@@ -24,7 +27,6 @@ from textual.widgets import (
     RichLog,
     Static,
     TabbedContent,
-    TabPane,
 )
 
 NOW = float(calendar.timegm((2026, 10, 23, 15, 0, 0, 0, 0, 0)))
@@ -529,7 +531,7 @@ async def test_seen_advances_on_leave(isolated: Path, make_run: MakeRun) -> None
         await pilot.press("g")
         await pilot.pause()
         assert abs(float(seen_file(isolated).read_text()) - NOW) < 1
-        assert tab_label(d, "feed-tab") == "Feed"
+        assert tab_label(d, "feed-tab") == "Feed (0 new)"
 
 
 async def test_seen_written_on_quit_and_default(isolated: Path, make_run: MakeRun) -> None:
@@ -614,7 +616,7 @@ async def test_owner_empty_message(isolated: Path, make_run: MakeRun) -> None:
         await settle(pilot)
         await pilot.press("o")
         await pilot.pause()
-        assert tab_label(d, "owner") == "Owner"
+        assert tab_label(d, "owner") == "Owner (0)"
         assert "nothing is waiting on you" in d.query_one("#owner-text", Markdown).source
 
 
@@ -626,10 +628,10 @@ def detail_run(make_run: MakeRun, log_md: str = "## s1\n- did `x`\n") -> Path:
     return make_run("a", plan=plan, log=log, log_md=log_md, sessions={1: [result]}, board={"a.md": "- ack x-1: ok\n"})
 
 
-def detail_tabs(d: app.Dash) -> TabbedContent:
-    """Return the detail screen's tabs."""
+def detail_tab(d: app.Dash) -> str:
+    """Return the detail screen's shown tab."""
     assert isinstance(d.screen, app.DetailScreen)
-    return d.screen.query_one(TabbedContent)
+    return d.screen.active
 
 
 async def test_detail_tabs_keys(isolated: Path, make_run: MakeRun) -> None:
@@ -640,16 +642,16 @@ async def test_detail_tabs_keys(isolated: Path, make_run: MakeRun) -> None:
     async with d.run_test(size=(160, 40)) as pilot:
         await settle(pilot)
         await pilot.press("enter")
-        assert detail_tabs(d).active == "d1"
+        assert detail_tab(d) == "d1"
         await pilot.press("right")
-        assert detail_tabs(d).active == "d2"
+        assert detail_tab(d) == "d2"
         await pilot.press("left", "left")
-        assert detail_tabs(d).active == "d6"
+        assert detail_tab(d) == "d6"
         await pilot.press("3")
-        assert detail_tabs(d).active == "d3"
+        assert detail_tab(d) == "d3"
         await pilot.press("g", "f", "o", "n", "r", "a", "s", "7", "enter")
         await pilot.pause()
-        assert detail_tabs(d).active == "d3"
+        assert detail_tab(d) == "d3"
         assert d.is_running
         await pilot.press("escape")
         assert not isinstance(d.screen, app.DetailScreen)
@@ -668,7 +670,7 @@ async def test_detail_lazy_tabs(isolated: Path, make_run: MakeRun) -> None:
         await pilot.press("enter")
         await pilot.pause()
         screen = d.screen
-        built = {p.id: bool(p.children) for p in screen.query(TabPane)}
+        built = {p.id: bool(p.children) for p in screen.query_one(ContentSwitcher).children}
         assert built == {"d1": True, "d2": False, "d3": False, "d4": False, "d5": False, "d6": False}
         assert "shipped **1.2**" in screen.query_one("#d1 Markdown", Markdown).source
         await pilot.press("5")
@@ -718,3 +720,122 @@ async def test_detail_open_budget(isolated: Path, make_run: MakeRun) -> None:
             await pilot.press("escape")
             await pilot.pause()
         assert best - base < 0.15
+
+
+async def test_owner_answer_follows_item_after_refresh(
+    isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refresh that adds an item above the selection keeps the answer on the selected item."""
+    a = make_run("a", plan=owner_plan("A first"), log=f"{iso(NOW)} stopped: done\n")
+    b = make_run("b", run="2026-10-21", plan=owner_plan("B item"), log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(a), repo_of(b))
+    d = dash(isolated)
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("o", "down", "enter", *"yes")
+        (a / "plan.md").write_text(owner_plan("A first", "A second"))
+        d.kick()
+        await settle(pilot)
+        assert "B item" in d.query_one("#owner-text", Markdown).source
+        await pilot.press("enter")
+        await pilot.pause()
+    note = 'Re owner item "B item": yes'
+    assert rec.calls == [((actions.note_argv(d.ap_bin, "2026-10-21", note, "plain"), repo_of(b)), {})]
+
+
+async def test_unreadable_paths_contained(isolated: Path, tmp_path: Path, make_run: MakeRun) -> None:
+    """A registry path or board dir under an unsearchable dir doesn't hide the other runs."""
+    locked = tmp_path / "locked"
+    (locked / "repo" / ".autopilot" / "runs" / "r").mkdir(parents=True)
+    (locked / "board").mkdir()
+    good = repo_of(working_run(make_run, "good", plan=f"session-cap: 9\nboard: {locked / 'board'}\n"))
+    register(isolated, locked / "repo", good)
+    locked.chmod(0)
+    try:
+        d = dash(isolated, live(good))
+        async with d.run_test(size=(200, 50)) as pilot:
+            await settle(pilot)
+            assert [p.ref.repo for p in panes(d)] == [good]
+            state = panes(d)[0].state
+            assert state is not None
+            assert state.label.startswith("WORKING s1")
+    finally:
+        locked.chmod(0o755)
+
+
+async def test_stop_uses_ap_rel_dir(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop on a live run whose AP_REL is older than the newest run dir targets the AP_REL dir."""
+    old = make_run("me", run="2026-10-22", plan="session-cap: 9\n", log=f"{iso(NOW - 60)} session=1 start\n")
+    make_run("me", run="2026-10-23", plan="session-cap: 9\n")
+    repo = repo_of(old)
+    register(isolated, repo)
+
+    async def rel(name: str) -> str | None:
+        return ".autopilot/runs/2026-10-22" if name == "autopilot-me" else None
+
+    monkeypatch.setattr(probe, "tmux_run_rel", rel)
+    d = dash(isolated, live(repo))
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("r")
+        await pilot.click("#stop")
+        await pilot.pause()
+    assert rec.calls == [((actions.control_argv(d.ap_bin, "2026-10-22", "stop"), repo), {})]
+
+
+async def test_focus_follows_run_when_pane_hides(isolated: Path, make_run: MakeRun) -> None:
+    """When an earlier pane hides, focus stays on the same run."""
+    a, b, c = (repo_of(working_run(make_run, n)) for n in "abc")
+    register(isolated, a, b, c)
+    up = {f"autopilot-{r.name}": r for r in (a, b, c)}
+
+    async def sessions() -> dict[str, Path]:
+        return dict(up)
+
+    d = dash(isolated, sessions)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        del up["autopilot-a"]
+        (a / ".autopilot" / "runs" / "2026-10-23" / "runner.log").write_text(f"{iso(NOW)} stopped: done\n")
+        d.kick()
+        await settle(pilot)
+        assert [p.ref.repo for p in panes(d)] == [b, c]
+        assert panes(d)[0].has_focus_within
+        await pilot.press("f", "g")
+        assert panes(d)[0].has_focus_within
+
+
+async def test_log_dir_unwritable_contained(isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run failure is still contained when the error log can't be written."""
+    (isolated / ".cache").write_text("not a dir")
+    good, bad = repo_of(working_run(make_run, "good")), repo_of(working_run(make_run, "bad"))
+    register(isolated, good, bad)
+    real = model.pane_state
+
+    def flaky(
+        run: tuple[model.RunRef, model.RunFiles],
+        now: float,
+        mtime: float | None,
+        git: str,
+        alive: Callable[[str], bool],
+    ) -> model.PaneState:
+        if run[0].repo == bad:
+            msg = "boom"
+            raise RuntimeError(msg)
+        return real(run, now, mtime, git, alive)
+
+    monkeypatch.setattr(model, "pane_state", flaky)
+    monkeypatch.setattr(logging, "raiseExceptions", False)
+    d = dash(isolated, live(good, bad))
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        g, b = panes(d)
+        assert g.state is not None
+        assert g.state.label.startswith("WORKING s1")
+        assert b.state is not None
+        assert b.state.st == "needs"
