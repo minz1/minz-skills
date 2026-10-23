@@ -26,6 +26,21 @@ test_now_marker() {
 }
 test_usage_line() { in_skill 'usage: /autopilot '; }
 
+test_new_rules() {
+  in_skill '`[c]` committed locally' 'refs/heads/ship/<id>' 'ahead-cap:' 'ack-timeout:' 'serves: <repo>' 'ship: <group>' 'findings:' \
+    "git diff --stat A B -- . ':!.autopilot' ':!.gitignore'" 'reject <id>' 'nack <id>' 'watch <id>' 'done <repo>' '(replaces <old-id>)'
+}
+test_owner_rules() { in_skill '## Owner' 'deviated: <why>' 'owner-notes-used:' '[once]' 'short paraphrase'; }
+test_planning_rules() { in_skill 'pgrep -af autopilot-runner' '.claude/settings.local.json' 'Resolve every SHA' 'should be tracked' '~/.config/autopilot/weekly-ceiling'; }
+test_interim_legacy() {
+  in_skill '## Interim: legacy plans' 'legacy: true' 'Remove this section once'
+  ! grep -qE '^(protocol|legacy):' "$PLAN" || die "template carries a version header"
+}
+test_templates() {
+  local k; for k in '^serves:' '^ahead-cap: 2' '^ack-timeout: 6h' '^owner-notes-used:' '^## Owner'; do grep -q "$k" "$PLAN" || die "plan template lacks $k"; done
+  for k in '## Long commands' '## Shared tool locks' '## Peers'; do grep -qF "$k" "$DIR/../skills/autopilot/templates/rules.md" || die "rules template lacks $k"; done
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -39,5 +54,10 @@ out=$(test_read_tool 2>/dev/null); t test_read_tool "$out" $?
 out=$(test_remote_shas_fetched 2>/dev/null); t test_remote_shas_fetched "$out" $?
 out=$(test_now_marker 2>/dev/null); t test_now_marker "$out" $?
 out=$(test_usage_line 2>/dev/null); t test_usage_line "$out" $?
+out=$(test_new_rules 2>/dev/null); t test_new_rules "$out" $?
+out=$(test_owner_rules 2>/dev/null); t test_owner_rules "$out" $?
+out=$(test_planning_rules 2>/dev/null); t test_planning_rules "$out" $?
+out=$(test_interim_legacy 2>/dev/null); t test_interim_legacy "$out" $?
+out=$(test_templates 2>/dev/null); t test_templates "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
