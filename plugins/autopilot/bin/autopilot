@@ -39,7 +39,8 @@ live() { tmux has-session -t "$target" 2>/dev/null; }
 case $cmd in
   note)
     [ ${#words[@]} -gt 0 ] || usage
-    printf -- '- %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "${words[*]}" >> "$rel/owner.md"
+    printf -- '- %s %s\n' "$(date -u +%FT%TZ)" "${words[*]}" >> "$rel/owner.md"
+    echo "note $(grep -c '^- ' "$rel/owner.md") added; a waiting run wakes within ~10 s; a running session sees it before its next push or at its next session"
     ;;
   start)
     live && fail "already running in tmux session $sess; watch with: $attach"
@@ -47,17 +48,19 @@ case $cmd in
       rm -f "$rel/STOP"
       echo "removed leftover STOP file"
     fi
-    unsets=(-u AUTOPILOT_MODEL -u SLEEP_CMD -u FAKE_SCENARIO)
+    unsets=(-u AUTOPILOT_MODEL -u SLEEP_CMD -u FAKE_SCENARIO -u AUTOPILOT_NO_UPGRADE -u AUTOPILOT_STALL_AFTER -u AUTOPILOT_STALL_EVERY)
+    unsets+=(-u AUTOPILOT_RESUME_MODE -u AUTOPILOT_RESUME_REASON -u AUTOPILOT_RESUME_CRASHES)
     while IFS= read -r v; do unsets+=(-u "$v"); done < <(compgen -e | grep '^CLAUDE')
     envs=()
-    for v in AUTOPILOT_MODEL CLAUDE_BIN SLEEP_CMD FAKE_SCENARIO; do
+    for v in AUTOPILOT_MODEL CLAUDE_BIN SLEEP_CMD FAKE_SCENARIO AUTOPILOT_NO_UPGRADE AUTOPILOT_STALL_AFTER AUTOPILOT_STALL_EVERY; do
       [ -z "${!v:-}" ] || envs+=(-e "$v=${!v}")
     done
     bin=$(dirname "$(readlink -f "$0")")
     before=$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)
     env "${unsets[@]}" \
       tmux new-session -d -s "$sess" -c "$repo" "${envs[@]}" \
-      "$(printf '%q ' bash "$bin/autopilot-runner" "$repo" "$rel")" || fail "tmux could not start session $sess"
+      -e "AP_RUNNER=$bin/autopilot-runner" -e "AP_REPO=$repo" -e "AP_REL=$rel" \
+      "exec bash \"\$AP_RUNNER\" \"\$AP_REPO\" \"\$AP_REL\"" || fail "tmux could not start session $sess"
     for _ in $(seq 10); do
       live || break
       [ "$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)" -gt "$before" ] && break
@@ -71,37 +74,72 @@ case $cmd in
   stop)
     live || { echo "nothing is running"; exit 0; }
     if [ -n "$now" ]; then
+      echo "$(date -u +%FT%TZ) stop --now by owner" >> "$rel/runner.log"
       tmux kill-session -t "$target"
       echo "killed tmux session $sess"
     else
       touch "$rel/STOP"
-      echo "the run stops before its next session starts (after the current session or wait)"
+      echo "the run stops within ~10 s if waiting, else after the current session"
     fi
     ;;
   status)
+    {
     plan=$rel/plan.md
     log=$rel/runner.log
-    last=$(sed -nE 's/^[^ ]+ (session=[0-9]+) (start|end) .*/\1/p' "$log" 2>/dev/null | tail -1)
+    hv() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$plan" | head -1; }
+    lastl=$(grep -E '^[^ ]+ session=[0-9]+ (start|end) ' "$log" 2>/dev/null | tail -1)
+    last=$(sed -nE 's/^[^ ]+ (session=[0-9]+) (start|end) .*/\1/p' <<<"$lastl")
+    after=$(awk '/^[^ ]+ session=[0-9]+ (start|end) /{a=""; next} {a = a $0 "\n"} END {printf "%s", a}' "$log" 2>/dev/null)
+    stopped=$(sed -nE 's/^[^ ]+ (stopped: .*)/\1/p' <<<"$after" | tail -1)
     if live; then
       state=running
+      if [[ $lastl == *" start "* ]]; then
+        state="running, ${last/=/ } since ${lastl%% *}"
+      elif [[ $lastl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?\" ]] && ! grep -q '^[^ ]* woke ' <<<"$after"; then
+        m=${BASH_REMATCH[1]} pids=${BASH_REMATCH[3]}
+        state="running, waiting until $(date -u -d "@$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60))" +%FT%TZ) (WAIT $m from ${last/=/ }${pids:+, pids $pids})"
+      elif [[ $lastl == *" exit=limit "* ]]; then
+        state="running, napping until the usage limit resets"
+      fi
     else
       state="not running"
       if [ -n "$last" ]; then
-        endl=$(grep -E "^[^ ]+ $last end " "$log" | tail -1)
-        word=$(sed -nE 's/^[^ ]+ session=[0-9]+ end exit=([A-Za-z]*).*/\1/p' <<<"$endl")
+        word=$(sed -nE 's/^[^ ]+ session=[0-9]+ end exit=([A-Za-z]*).*/\1/p' <<<"$lastl")
         case $word in
-          killed | crash | limit) state="not running, ${last/=/ } ended dirty ($word)" ;;
+          killed | crash | limit | nowait) state="not running, ${last/=/ } ended dirty ($word)" ;;
           "") state="not running, ${last/=/ } ended dirty (no end line)" ;;
           *) state="not running, ${last/=/ } ended $word" ;;
         esac
       fi
+      [ -z "$stopped" ] || state+="; $stopped"
     fi
+    nowid=$(hv now)
+    [[ $nowid =~ ^[0-9]+$ ]] || nowid=
+    item=
+    [ -z "$nowid" ] || item=$(grep -m1 -E "^- \[[^]]*\] *$nowid\." "$plan")
+    [ -n "$item" ] || item=$(grep -m1 '^- \[ \]' "$plan")
+    item=$(sed -E 's/^- \[[^]]*\] *//' <<<"$item")
+    work=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | grep -vc ' exit=WAIT ')
+    notes=$(grep -c '^- ' "$rel/owner.md" 2>/dev/null)
     echo "run $run_name: $state"
-    echo "$(grep -c '^- \[x\]' "$plan") done, $(grep -cE '^- \[!!?\]' "$plan") blocked, $(grep -c '^- \[ \]' "$plan") open"
-    echo "next: $(grep -m1 '^- \[ \]' "$plan" || echo none)"
+    item=${item:-none}
+    echo "now: ${item:0:160}"
+    echo "$(grep -c '^- \[x\]' "$plan") done, $(grep -cE '^- \[!!?\]' "$plan") blocked, $(grep -c '^- \[ \]' "$plan") open · sessions $work/$(hv session-cap) · notes $(hv owner-notes-applied | grep . || echo 0)/${notes:-0}"
     echo "handoff:"
-    sed -n '/^## Handoff/,$p' "$plan" | sed 1d | grep . | head -3
+    awk '/^## Handoff/{h=1; next} /^## /{h=0} h && NF' "$plan" | head -15
     echo "last session end: $(grep -E '^[^ ]+ session=[0-9]+ end exit=' "$log" 2>/dev/null | tail -1 | cut -d' ' -f2-)"
+    board=$(hv board)
+    case $board in none | '') board= ;; \~/*) board=$HOME/${board#\~/} ;; esac
+    if [ -n "$board" ] && [ -d "$board" ]; then
+      echo "board:"
+      for f in "${board%/}"/*.md; do
+        [ -f "$f" ] || continue
+        l=$(grep '^- ' "$f" | tail -1)
+        l=${l#- }
+        echo "  $(basename "$f" .md)  ${l:0:160}"
+      done
+    fi
     ! live || echo "watch: $attach"
+    } | tr -d '\000-\010\013-\037\177'
     ;;
 esac

@@ -1,7 +1,7 @@
 # Autopilot run <YYYY-MM-DD>: <title>
 repo: <repo>
 run: .autopilot/runs/<YYYY-MM-DD>
-board: ~/.autopilot/<YYYY-MM-DD>/board/
+board: <~/.autopilot/<run>/board/ for a paired run, none for a solo run>
 scope: <bounded|open>
 weekly-ceiling: 0.80
 session-cap: 60

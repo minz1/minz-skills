@@ -8,17 +8,97 @@ for v in $(compgen -e | grep '^CLAUDE' | grep -vx CLAUDE_BIN); do unset "$v"; do
 cd "$repo" || exit 1
 
 child=
+wd=
+woke=
+board_streak=0
+pre_blocked=
+board_dir=
+repo_name=$(basename "$repo")
+declare -A base_board=()
 running=
-mode='continue'
-reason=
-crashes=0
-launched=0
+unset AP_RUNNER AP_REPO AP_REL
+exec_path=${AUTOPILOT_RESUME_MODE:+1}
+mode=${AUTOPILOT_RESUME_MODE:-continue}
+reason=${AUTOPILOT_RESUME_REASON:-}
+crashes=${AUTOPILOT_RESUME_CRASHES:-0}
+unset AUTOPILOT_RESUME_MODE AUTOPILOT_RESUME_REASON AUTOPILOT_RESUME_CRASHES
 idx=$(mktemp -u)
 
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$run/runner.log"; }
+notify() {
+  local h=$HOME/.config/autopilot/notify
+  [ -x "$h" ] || return 0
+  setsid timeout 60 "$h" "$repo_name" "$(basename "$run")" "$1" "$2" </dev/null >/dev/null 2>&1 &
+}
+
+blocked_key() { [[ $1 =~ ^-\ \[(!!?)\]\ *([0-9]+) ]] && echo "${BASH_REMATCH[2]}${BASH_REMATCH[1]}" || echo "$1"; }
+
+alive() { { kill -0 "$1" || [ -d "/proc/$1" ]; } 2>/dev/null; }
+
+clean() { tr -d '\000-\010\013-\037\177'; }
+
+notify_blocked() {
+  local l
+  while IFS= read -r l; do
+    grep -qxF -- "$(blocked_key "$l")" <<<"$pre_blocked" && continue
+    notify blocked "${l:0:200}"
+    return
+  done < <(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null)
+}
+
+watchdog() {
+  local every=${AUTOPILOT_STALL_EVERY:-60} after=${AUTOPILOT_STALL_AFTER:-3900} fired='' m now sp=''
+  trap 'kill $sp 2>/dev/null; exit 0' TERM
+  while kill -0 $$ 2>/dev/null; do
+    sleep "$every" &
+    sp=$!
+    wait "$sp"
+    m=$(stat -c %Y "$1" 2>/dev/null) || continue
+    now=$(date +%s)
+    if ((now - m >= after)); then
+      [ -n "$fired" ] || notify stalled "session $2 silent $(((now - m) / 60))m"
+      fired=1
+    else
+      fired=
+    fi
+  done
+}
+
+stop_watchdog() {
+  [ -n "$wd" ] || return 0
+  kill "$wd" 2>/dev/null
+  wait "$wd" 2>/dev/null
+  wd=
+}
+
+self_path=$(readlink -f "$0")
+vdir=${self_path%/bin/autopilot-runner}
+skipped_upgrade=
+
+self_upgrade() {
+  local p r new=
+  [ "${AUTOPILOT_NO_UPGRADE:-}" != 1 ] || return 0
+  while IFS= read -r p; do
+    r=$(readlink -f "$p") || continue
+    [[ $r == "${vdir%/*}/"* ]] && new=$r && break
+  done < <(jq -r '.plugins[]?[]? | select(.scope? == "user") | .installPath? // empty' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
+  [ -n "$new" ] && [ "$new" != "$vdir" ] && [ -f "$new/bin/autopilot-runner" ] || return 0
+  if ! bash -n "$new/bin/autopilot-runner" 2>/dev/null; then
+    [ "$skipped_upgrade" = "$new" ] || log "upgrade skipped: $new fails bash -n"
+    skipped_upgrade=$new
+    return 0
+  fi
+  log "upgrade ${vdir##*/} -> ${new##*/}"
+  rm -f "$idx" "$idx.lock"
+  AUTOPILOT_RESUME_MODE=$mode AUTOPILOT_RESUME_REASON=$reason AUTOPILOT_RESUME_CRASHES=$crashes \
+    exec bash "$new/bin/autopilot-runner" "$repo" "$run"
+}
+
 stop() {
   log "stopped: $1"
-  echo "stopped: $1" >> "$run/plan.md"
+  echo "stopped: $1" >> "$run/log.md"
+  [ -z "$board_dir" ] || echo "- $repo_name: runner stopped $(date -u +%FT%TZ): $1" >> "$board_dir/$repo_name.md"
+  notify stopped "$1"
   exit 0
 }
 
@@ -26,16 +106,21 @@ on_kill() {
   if [ -n "$running" ]; then
     n=$running
     running=
-    log "session=$n end exit=killed detail=\"\" weekly=? five_hour=? peak_ctx=0"
+    log "session=$n end exit=killed detail=\"${1:-}\" weekly=? five_hour=? peak_ctx=0"
   fi
   if [ -n "$child" ]; then
     kill -- -"$child" 2>/dev/null
     wait "$child" 2>/dev/null
   fi
+  stop_watchdog
   rm -f "$idx" "$idx.lock"
   exit 130
 }
-trap on_kill HUP TERM INT
+trap "on_kill HUP" HUP
+trap "on_kill TERM" TERM
+trap "on_kill INT" INT
+
+work_sessions() { grep -E '^[^ ]+ session=[0-9]+ end ' "$run/runner.log" 2>/dev/null | grep -vc ' exit=WAIT '; }
 
 header_value() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$run/plan.md" | head -1; }
 
@@ -46,13 +131,77 @@ read_header() {
   [[ $ceiling =~ ^[0-9]*\.?[0-9]+$ ]] || bad='weekly-ceiling'
   [[ $cap =~ ^[0-9]+$ ]] || bad='session-cap'
   [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
+  board_dir=$(header_value board)
+  case $board_dir in none | '') board_dir= ;; \~/*) board_dir=$HOME/${board_dir#\~/} ;; esac
+  board_dir=${board_dir%/}
+  [ -d "$board_dir" ] || board_dir=
 }
 
-nap() {
+step() {
   setsid "$SLEEP_CMD" "$1" &
   child=$!
   wait "$child"
   child=
+}
+
+count_notes() { local c; c=$(grep -c '^- ' "$run/owner.md" 2>/dev/null); echo "${c:-0}"; }
+
+board_files() {
+  local f
+  [ -n "$board_dir" ] || return 0
+  for f in "$board_dir"/*.md; do
+    [ -f "$f" ] && [ "${f##*/}" != "$repo_name.md" ] && printf '%s\n' "$f"
+  done
+}
+
+snapshot() {
+  local f
+  base_notes=$(count_notes)
+  base_board=()
+  while IFS= read -r f; do base_board[$f]=$(wc -l < "$f"); done < <(board_files)
+}
+
+addressed() {
+  local l r
+  while IFS= read -r l; do
+    if [[ $l =~ →\ ([^:]*) ]]; then
+      r=${BASH_REMATCH[1]}
+      [[ " ${r//,/ } " == *" $repo_name "* ]] && return 0
+    fi
+    [[ $l =~ ^-\ ([0-9T:-]+Z\ )?done\ [A-Za-z0-9_.-]+ ]] && return 0
+  done <<<"$1"
+  grep -oE '(^|[^A-Za-z])(ack|nack|reject) [A-Za-z0-9_.-]+-[0-9]+' <<<"$1" | sed -E 's/.* //; s/-[0-9]+$//' | grep -qxF -- "$repo_name"
+}
+
+wake_check() {
+  local p f cur b
+  wake=
+  [ "$(count_notes)" -le "${base_notes:-0}" ] || { wake=note; return; }
+  for p in $wait_pids; do alive "$p" || { wake="pid:$p"; return; }; done
+  [ "$1" = full ] || return 0
+  while IFS= read -r f; do
+    cur=$(wc -l < "$f") b=${base_board[$f]:-0}
+    ((cur >= b)) || b=0
+    ((cur > b)) || continue
+    base_board[$f]=$cur
+    addressed "$(sed -n "$((b + 1)),${cur}p" "$f")" && { wake="board:${f##*/}"; return; }
+  done < <(board_files)
+}
+
+nap() {
+  local total=$1 mode=$2 el=0 r='' s
+  while :; do
+    if [ -e "$run/STOP" ]; then r=stop
+    elif [ "$mode" != limit ]; then wake_check "$mode"; r=$wake
+    fi
+    [ -z "$r" ] || break
+    ((el < total)) || { r=timeout; break; }
+    s=$((total - el < 10 ? total - el : 10))
+    step "$s"
+    el=$((el + s))
+  done
+  log "woke reason=$r after=${el}s"
+  woke=$r
 }
 
 checkpoint() {
@@ -64,7 +213,8 @@ checkpoint() {
 }
 
 parse_word() {
-  local m
+  local m rest p
+  wait_pids=
   kind=crash detail=
   [ "$rc" -eq 0 ] || return
   case $word in
@@ -72,33 +222,79 @@ parse_word() {
     STOP\ *) kind=STOP detail=${word#STOP } ;;
     WAIT\ *)
       m=${word#WAIT }
-      if [[ $m =~ ^[0-9]+$ ]] && ((10#$m > 0)); then kind=WAIT detail=$((10#$m)); fi
+      [[ $m =~ ^([0-9]+)(\ +(.*))?$ ]] || return
+      m=${BASH_REMATCH[1]} rest=${BASH_REMATCH[3]}
+      ((10#$m > 0)) || return
+      kind=WAIT detail=$((10#$m))
+      [ -n "$rest" ] || return
+      if [[ $rest =~ ^pid=([0-9]+(,[0-9]+)*)$ ]]; then
+        for p in ${BASH_REMATCH[1]//,/ }; do
+          if alive "$p"; then wait_pids+=" $p"; else log "pid $p not found at wait start"; fi
+        done
+        wait_pids=${wait_pids# }
+        [ -z "$wait_pids" ] || detail+=" pid=${wait_pids// /,}"
+      else
+        log "malformed pid list \"${rest//\"/\'}\", plain WAIT"
+      fi
       ;;
   esac
 }
 
+ended_with_live_tasks() {
+  jq -se '(to_entries | map(select(.value.type == "assistant" and .value.parent_tool_use_id == null)) | last | .key // -1) as $la
+    | [.[$la + 1:][] | select(.type == "system" and .subtype == "task_notification" and .status == "stopped")] | length > 0' "$1" >/dev/null 2>&1
+}
+
+resume_wait() {
+  local endl m dl now
+  endl=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$run/runner.log" 2>/dev/null | tail -1)
+  [[ $endl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?\" ]] || return 0
+  m=${BASH_REMATCH[1]} wait_pids=${BASH_REMATCH[3]//,/ }
+  awk '/ session=[0-9]+ end /{after=""; next} {after = after $0 "\n"} END {printf "%s", after}' "$run/runner.log" |
+    grep -qE '^[^ ]+ (woke |stopped:)' && return 0
+  dl=$(($(date -u -d "${endl%% *}" +%s) + 10#$m * 60)) now=$(date +%s)
+  ((dl > now)) || return 0
+  log "resume wait $((dl - now))s"
+  snapshot
+  nap $((dl - now)) full
+}
+
 mkdir -p "$HOME/.autopilot" "$run/sessions"
-read_header || { echo "autopilot-runner: $bad" >&2; exit 2; }
+if ! read_header; then
+  [ -z "$exec_path" ] || stop "$bad"
+  echo "autopilot-runner: $bad" >&2
+  exit 2
+fi
+log "runner start version=${vdir##*/}"
+[ -n "$exec_path" ] || resume_wait
 
 while :; do
+  self_upgrade
   [ ! -e "$run/STOP" ] || stop "stop file"
   read_header || stop "$bad"
+  if [ "$mode" != wrapup ] && [ "$(work_sessions)" -ge "$cap" ]; then
+    reason="session cap $cap reached; raise session-cap in plan.md to continue" mode=wrapup
+  fi
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) (start|end) .*/\1/p' "$run/runner.log" 2>/dev/null | sort -n | tail -1)
   n=$((${n:-0} + 1))
   sha=$(checkpoint "$n")
   [ -n "$sha" ] || stop "checkpoint failed"
   log "session=$n start mode=$mode checkpoint=$sha"
   running=$n
-  launched=$((launched + 1))
 
   args=(-p "/autopilot:autopilot $mode $run" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose)
   [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
   stream=$run/sessions/$n.jsonl
+  snapshot
+  pre_blocked=$(grep -E '^- \[!!?\]' "$run/plan.md" 2>/dev/null | while IFS= read -r l; do blocked_key "$l"; done)
   CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 setsid "$CLAUDE_BIN" "${args[@]}" > "$stream" &
   child=$!
+  watchdog "$stream" "$n" </dev/null >/dev/null 2>&1 &
+  wd=$!
   wait "$child"
   rc=$?
   child=
+  stop_watchdog
 
   read -r ltype lreset weekly five peak <<< "$(jq -rs '
     [.[] | select(.type == "rate_limit_event") | .rate_limit_info] as $r
@@ -109,7 +305,7 @@ while :; do
        ([.[] | select(.type == "assistant" and .parent_tool_use_id == null) | .message.usage
          | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | max // 0)]
     | join(" ")' "$stream" 2> /dev/null)"
-  text=$(jq -rs '[.[] | select(.type == "result")] | last.result // ""' "$stream" 2> /dev/null)
+  text=$(jq -rs '[.[] | select(.type == "result")] | last.result // ""' "$stream" 2> /dev/null | clean)
   word=$(printf '%s\n' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep '^AUTOPILOT: ' | tail -1)
   word=${word#AUTOPILOT: }
 
@@ -117,8 +313,10 @@ while :; do
     kind=limit detail=$ltype
   else
     parse_word
+    [ "$kind" != crash ] || ! ended_with_live_tasks "$stream" || kind=nowait
   fi
   running=
+  notify_blocked
   log "session=$n end exit=$kind detail=\"${detail//\"/\'}\" weekly=${weekly:-?} five_hour=${five:-?} peak_ctx=${peak:-0}"
   printf '%s\n' "$text"
 
@@ -127,12 +325,12 @@ while :; do
       [ "$detail" = five_hour ] || stop "limit $detail reached"
       wait_s=$((lreset - $(date +%s)))
       [ "$wait_s" -ge 60 ] || wait_s=60
-      nap "$wait_s"
+      nap "$wait_s" limit
       continue
       ;;
     DONE) stop "${reason:-done}" ;;
     STOP) stop "owner needed: $detail" ;;
-    crash)
+    crash | nowait)
       crashes=$((crashes + 1))
       [ "$crashes" -lt 2 ] || stop "two crashes"
       continue
@@ -143,8 +341,17 @@ while :; do
   read_header || stop "$bad"
   if [ "${weekly:-?}" != '?' ] && awk -v a="$weekly" -v b="$ceiling" 'BEGIN { exit !(a + 0 >= b + 0) }'; then
     reason="weekly usage $weekly" mode=wrapup
-  elif [ "$launched" -ge "$cap" ]; then
-    reason="session cap $cap" mode=wrapup
   fi
-  [ "$kind" != WAIT ] || nap $((detail * 60))
+  if [ "$kind" = WAIT ]; then
+    if ((board_streak >= 10)); then
+      ((board_streak > 10)) || notify stalled "10 board-woken waits in a row; board wake paused until a work session"
+      board_streak=11
+      nap $((${detail%% *} * 60)) noboard
+    else
+      nap $((${detail%% *} * 60)) full
+      if [[ $woke == board:* ]]; then board_streak=$((board_streak + 1)); else board_streak=0; fi
+    fi
+  else
+    board_streak=0
+  fi
 done
