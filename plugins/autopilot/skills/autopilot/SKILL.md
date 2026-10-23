@@ -7,13 +7,13 @@ description: Use for /autopilot, "autopilot plan", "start an autonomous run" or 
 
 Arguments: $ARGUMENTS
 
-Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop` and do nothing more.
+Dispatch on the first argument: `plan`, `continue`, `wrapup`, `start`, `status`, `note`, `stop`, `watch`, `dash`. For anything else, print `usage: /autopilot plan|continue|wrapup|start|status|note|stop|watch|dash` and do nothing more.
 
 Templates are in `${CLAUDE_PLUGIN_ROOT}/skills/autopilot/templates/` (`plan.md`, `rules.md`).
 
-## start, status, note, stop
+## start, status, note, stop, watch, dash
 
-Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged.
+Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" <args>` from the repo and show its output unchanged. `dash` and `watch` are interactive terminal panes: for `dash`, run it with `TMUX=x` in front so it builds the grid without attaching, then tell the owner to run `tmux -L autopilot-dash attach` in a terminal; for `watch`, give the owner the command `bash "${CLAUDE_PLUGIN_ROOT}/bin/autopilot" watch` (with the path expanded) to run in a terminal from the repo.
 
 ## plan
 
@@ -39,7 +39,10 @@ Run 2026-10-21 in batmanROTJ is ready (open scope, 4 items, ceiling 80%).
   /autopilot stop --now        stop immediately (the next start recovers)
   /autopilot plan              revise the plan (before starting, or after a stop)
 
-  From a terminal: tmux attach -t '=autopilot-batmanROTJ'        watch
+  /autopilot dash              every live run in one tmux grid, with the board
+
+  From a terminal: tmux -L autopilot-dash attach                 the dash grid
+                   tmux attach -t '=autopilot-batmanROTJ'        the raw runner
                    tmux kill-session -t '=autopilot-batmanROTJ'  emergency stop
 ```
 
@@ -53,13 +56,13 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
 2. Recovery: the last `start` line in `<run-dir>/runner.log` is this session. The previous session is the highest `session=` below it. Recover only if that session is dirty: it has a `start` line and no `end` line, its `end` has `exit=killed`, `exit=crash`, `exit=nowait` or `exit=limit`, or its `end` has `exit=STOP` and `git status --porcelain` is non-empty. Then diff the work tree against `refs/autopilot/<run>/<n>` (`<n>` = that session), check worktrees and fleet agent logs against the Handoff, repair the Handoff, and append a `log.md` entry that names the ref and the mismatch. A file that is in the checkpoint ref but not in `HEAD`, and is still untracked now, counts as unchanged. The interrupted item's attempt is not counted. If the previous session ended cleanly (or there is none), skip this step and write no recovery note.
 3. `owner-notes-applied` counts the note lines (starting `- `) already applied. Apply the rest in order to the plan (add, drop, reorder items, change the mandate), then advance the counter. An owner note outranks anything else in the plan.
 4. Answer board items addressed to this repo. If the only remaining work waits on another repo (the Final item does not count as remaining work), post to your own board file and exit `WAIT <cap>`, where the cap is the longest you would wait before something must be wrong (the runner wakes the run as soon as a board line addressed to this repo appears). When exiting WAIT, never post a board line addressed to a peer unless it is a new request or an answer: board lines wake peers, and wakes don't count toward the session cap.
-5. Pick the work, first match wins:
+5. Pick the work, first match wins, then write `now: <item number>` in the plan header (the dashboard and `status` show it):
    1. the first `[ ]` item (or batch) whose `after:` items are done; skip an item with `waiting: <id>` until an `ack <id>` line appears in another repo's board file; then remove `waiting:` and work it
    2. a `[!]` item (every `[!]` is still unrevisited): its one revisit, a fresh attempt that starts from its failure notes in `log.md` and tries a different approach
    3. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty
    4. the Final item
 6. Work it: subagents, worktrees, fleets. Background agents and background commands started inside the session must finish before you exit: ending your turn ends the session and stops them (the runner logs `exit=nowait`), so wait for them. Only detached jobs (`setsid … & echo $!`, see `WAIT … pid=` in step 9) outlive the session; list each with its pid and log path in the Handoff. Commit on branch `autopilot/<run>` (create it from `HEAD` if missing) unless the plan or `.autopilot/rules.md` names another branch. Anything found along the way goes under Discovered (open scope, in the mandate) or the Parking lot (bounded scope, out of scope, or on the stop list). Never work a Parking lot item.
-7. Run its check. Pass: mark `[x]`; push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Re-read `owner.md` right before any push, tag, deploy or deploy post: apply new notes first, or exit `STOP` if one conflicts. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; a failed revisit (5.2) changes `[!]` to `[!!]` with `revisit failed: <reason>`, since a revisited item never stays `[!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt. Then go to step 8: one item (or batch) per session, never a second pick.
+7. Run its check. Pass: mark `[x]`; push, tag or deploy only if `.autopilot/rules.md` allows mid-run. Re-read `owner.md` right before any push, tag, deploy or deploy post: apply new notes first, or exit `STOP` if one conflicts. Fail: record the attempt on the item line (`attempt 1 failed: <reason>`); second failure `[!]` with `BLOCKED: <reason>`; a failed revisit (5.2) changes `[!]` to `[!!]` with `revisit failed: <reason>`, since a revisited item never stays `[!]`; skip dependants of a blocked item. Skipping a `waiting:` item counts no attempt. Then clear `now:` (leave it empty) and go to step 8: one item (or batch) per session, never a second pick.
 8. Rewrite the Handoff section of `plan.md` (state, open branches and worktrees, what the next session must know; at most ~40 lines). A remote SHA named in the Handoff must come from a `git fetch` + `git rev-parse` you ran: only name one if you fetched it in that session. It lists every running fleet agent with its log path and last-known state (running, exited N, silent since). Append the long version to `<run-dir>/log.md`.
 9. Just before choosing the exit word, re-read every board file (when the plan has a board). If a request addressed to this repo is unanswered and this session could act on it now, exit `NEXT`; if it is blocked (behind another post, or an owner note says hold), exit `WAIT <cap>` and the board wake brings the run back. Before exiting `STOP`, commit or revert, or list every dirty path (`git status --porcelain`) in the Handoff.
 

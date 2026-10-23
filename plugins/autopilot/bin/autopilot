@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 usage() {
-  echo "usage: autopilot {start|status|note <text>|stop [--now]} [--run <name>]" >&2
+  echo "usage: autopilot {start|status|note <text>|stop [--now]|watch|dash} [--run <name>]" >&2
   exit 2
 }
 fail() { echo "$*" >&2; exit 1; }
@@ -19,9 +19,53 @@ while [ $# -gt 0 ]; do
   esac
 done
 case $cmd in
-  start | status | note | stop) ;;
+  start | status | note | stop | watch | dash) ;;
   *) usage ;;
 esac
+bin=$(dirname "$(readlink -f "$0")")
+
+if [ "$cmd" = dash ]; then
+  T() { env -u TMUX tmux -f /dev/null -L autopilot-dash "$@"; }
+  mapfile -t repos < <(env -u TMUX tmux list-sessions -f '#{m:autopilot-*,#{session_name}}' -F '#{session_path}' 2>/dev/null)
+  [ ${#repos[@]} -gt 0 ] || fail "no autopilot-* tmux sessions running"
+  T kill-server 2>/dev/null
+  for _ in $(seq 20); do T has-session 2>/dev/null || break; sleep 0.1; done
+  board=
+  for r in "${repos[@]}"; do
+    pane="exec bash \"\$AP_WATCH\" \"\$AP_REPO\""
+    if T has-session -t =dash 2>/dev/null; then
+      T split-window -t =dash: -e "AP_WATCH=$bin/autopilot-watch" -e "AP_REPO=$r" "$pane"
+      T select-layout -t =dash: tiled
+    else
+      T set -g history-limit 0 \; new-session -d -s dash -x 240 -y 60 -e "AP_WATCH=$bin/autopilot-watch" -e "AP_REPO=$r" "$pane"
+    fi
+    if [ -z "$board" ]; then
+      p=$(find "$r/.autopilot/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)/plan.md
+      b=$(sed -n 's/^board:[[:space:]]*//p' "$p" 2>/dev/null | head -1)
+      case $b in none | '') b= ;; \~/*) b=$HOME/${b#\~/} ;; esac
+      [ -z "$b" ] || [ ! -d "$b" ] || board=${b%/}
+    fi
+  done
+  T select-layout -t =dash: tiled
+  if [ -n "$board" ]; then
+    n=$(find "$board" -maxdepth 1 -name '*.md' | wc -l)
+    T split-window -f -v -l $((n + 1)) -t =dash: -e "AP_WATCH=$bin/autopilot-watch" -e "AP_BOARD=$board" "exec bash \"\$AP_WATCH\" board \"\$AP_BOARD\""
+  fi
+  T select-pane -t =dash:0.0
+  T set -g mouse on \; set -g focus-events on \; set -g pane-border-lines heavy \
+    \; set -g pane-border-style fg=colour237 \; set -g pane-active-border-style fg=colour231,bold \
+    \; set -g status-style bg=colour235,fg=colour250 \; set -g status-left-length 120 \; set -g status-right-length 80 \
+    \; set -g status-left ' #[fg=green]■ working #[fg=blue]■ waiting #[fg=yellow]■ quiet #[fg=red]■ needs you #[fg=colour244]■ done #[default]' \
+    \; set -g status-right 'click a pane (◆ = focused) for keys · C-b d detach ' \
+    \; set -g window-status-format '' \; set -g window-status-current-format ''
+  T bind -n WheelUpPane select-pane -t = \\\; send-keys -t = k
+  T bind -n WheelDownPane select-pane -t = \\\; send-keys -t = j
+  if [ -n "${TMUX:-}" ]; then
+    echo "attach with: TMUX= tmux -L autopilot-dash attach"
+    exit 0
+  fi
+  exec tmux -L autopilot-dash attach -t =dash
+fi
 
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not inside a git repository"
 sess=autopilot-$(basename "$repo" | tr '.:' '__')
@@ -37,6 +81,9 @@ rel=.autopilot/runs/$run_name
 live() { tmux has-session -t "$target" 2>/dev/null; }
 
 case $cmd in
+  watch)
+    exec bash "$bin/autopilot-watch" "$repo" "$run_name"
+    ;;
   note)
     [ ${#words[@]} -gt 0 ] || usage
     printf -- '- %s %s\n' "$(date -u +%FT%TZ)" "${words[*]}" >> "$rel/owner.md"
@@ -55,7 +102,6 @@ case $cmd in
     for v in AUTOPILOT_MODEL CLAUDE_BIN SLEEP_CMD FAKE_SCENARIO AUTOPILOT_NO_UPGRADE AUTOPILOT_STALL_AFTER AUTOPILOT_STALL_EVERY; do
       [ -z "${!v:-}" ] || envs+=(-e "$v=${!v}")
     done
-    bin=$(dirname "$(readlink -f "$0")")
     before=$(wc -l 2>/dev/null < "$rel/runner.log" || echo 0)
     env "${unsets[@]}" \
       tmux new-session -d -s "$sess" -c "$repo" "${envs[@]}" \
