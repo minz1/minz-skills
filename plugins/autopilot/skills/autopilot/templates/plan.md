@@ -6,6 +6,7 @@ scope: <bounded|open>
 weekly-ceiling: 0.80
 session-cap: 60
 owner-notes-applied: 0
+now:
 
 ## Mandate
 <bounded: what done looks like. open: what is in scope, where to look for more,

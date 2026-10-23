@@ -20,6 +20,10 @@ test_solo_board_none() {
 }
 test_read_tool() { in_skill 'Read tool'; }
 test_remote_shas_fetched() { in_skill 'fetched it in that session'; }
+test_now_marker() {
+  in_skill 'now: <item number>' 'clear `now:`'
+  grep -q '^now:' "$PLAN" || die "template lacks now:"
+}
 test_usage_line() { in_skill 'usage: /autopilot '; }
 
 fail=0
