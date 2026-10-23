@@ -290,7 +290,7 @@ test_dash_quoting() {
   setup "it's \$(touch pwned) repo"; tmux new-session -d -s autopilot-x -c "$repo" 'sleep 600'
   TMUX=x ap dash; eq "$RC" 0 rc
   trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
-  sleep 2; [ ! -e "$W/pwned" ] && [ ! -e "$repo/pwned" ] || die "injection ran"
+  sleep 2; if [ -e "$W/pwned" ] || [ -e "$repo/pwned" ]; then die "injection ran"; fi
   tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "it's \$(touch pwned) repo" || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
   tmux -L autopilot-dash kill-server
 }
@@ -405,6 +405,11 @@ out=$(test_note_utc_and_confirm 2>/dev/null); t test_note_utc_and_confirm "$out"
 out=$(test_start_passes_no_upgrade 2>/dev/null); t test_start_passes_no_upgrade "$out" $?
 out=$(test_start_quoting 2>/dev/null); t test_start_quoting "$out" $?
 out=$(test_status_cleans_control_chars 2>/dev/null); t test_status_cleans_control_chars "$out" $?
+out=$(test_usage_lists_dash_watch 2>/dev/null); t test_usage_lists_dash_watch "$out" $?
+out=$(test_dash_without_runs 2>/dev/null); t test_dash_without_runs "$out" $?
+out=$(test_dash_builds_panes 2>/dev/null); t test_dash_builds_panes "$out" $?
+out=$(test_dash_quoting 2>/dev/null); t test_dash_quoting "$out" $?
+out=$(test_watch_once_via_cli 2>/dev/null); t test_watch_once_via_cli "$out" $?
 out=$(test_session_name_sanitized 2>/dev/null); t test_session_name_sanitized "$out" $?
 out=$(test_exact_session_match 2>/dev/null); t test_exact_session_match "$out" $?
 out=$(test_exact_match_without_exact_session 2>/dev/null); t test_exact_match_without_exact_session "$out" $?

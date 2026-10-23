@@ -13,7 +13,9 @@ usage() {
 clean() { tr -d '\000-\010\013-\037\177'; }
 num() { [[ ${1:-} =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
 now_s() { echo "${AUTOPILOT_NOW:-$(date +%s)}"; }
-ago() { local s=$1; ((s < 60)) && echo "<1m" || { ((s < 5400)) && echo "$((s / 60))m" || echo "$((s / 3600))h"; }; }
+ago() {
+  if (($1 < 60)); then echo "<1m"; elif (($1 < 5400)); then echo "$(($1 / 60))m"; else echo "$(($1 / 3600))h"; fi
+}
 hv() { sed -n "s/^$1:[[:space:]]*//;T;s/[[:space:]]*\$//;p" "$2" 2>/dev/null | head -1; }
 pct() { [ -n "$1" ] && awk -v x="$1" 'BEGIN { printf "%d%%", x * 100 }' || echo '?'; }
 board_path() {
@@ -88,8 +90,8 @@ state_of() { # <repo> [run] -> st label stream info[]
   after=$(awk '/^[^ ]+ session=[0-9]+ (start|end) /{a=""; next} {a = a $0 "\n"} END {printf "%s", a}' "$log" 2>/dev/null)
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) .*/\1/p' <<<"$lastl")
   stream=$rel/sessions/$n.jsonl
-  local done blk open
-  done=$(grep -c '^- \[x\]' "$plan" 2>/dev/null) blk=$(grep -cE '^- \[!!?\]' "$plan" 2>/dev/null) open=$(grep -c '^- \[ \]' "$plan" 2>/dev/null)
+  local ndone blk open
+  ndone=$(grep -c '^- \[x\]' "$plan" 2>/dev/null) blk=$(grep -cE '^- \[!!?\]' "$plan" 2>/dev/null) open=$(grep -c '^- \[ \]' "$plan" 2>/dev/null)
   if [[ $lastl == *" start "* ]] && ((live)); then
     age=$((now - $(stat -c %Y "$stream" 2>/dev/null || echo "$now")))
     if ((age >= STALL_AFTER)); then st=needs label="STALLED $(ago "$age") silent · s$n"
@@ -107,7 +109,7 @@ state_of() { # <repo> [run] -> st label stream info[]
   else
     r=$(sed -nE 's/^[^ ]+ stopped: (.*)/\1/p' <<<"$after" | tail -1 | clean)
     if [ -n "$endl" ] && [ -n "$r" ] && ! [[ $r =~ ^(owner\ needed|two\ crashes|limit|checkpoint|.*no\ valid) ]]; then
-      st=done label="STOPPED: $r"
+      st='done' label="STOPPED: $r"
     else
       st=needs label="STOPPED: ${r:-$(grep -oE 'exit=[a-z]+' <<<"$endl" || echo 'no runner')}"
     fi
@@ -138,7 +140,7 @@ state_of() { # <repo> [run] -> st label stream info[]
   notes=$(num "$(grep -c '^- ' "$rel/owner.md" 2>/dev/null)")
   info=(
     "item ${item:-none}"
-    "${done}✓ ${blk}✗ ${open}○  ·  s${n:-0}  ·  work $work/${cap:-?}  ·  wk $(pct "$weekly")/$(pct "$ceil")  ·  5h $(pct "$five")"
+    "${ndone}✓ ${blk}✗ ${open}○  ·  s${n:-0}  ·  work $work/${cap:-?}  ·  wk $(pct "$weekly")/$(pct "$ceil")  ·  5h $(pct "$five")"
     "last ${hist:-none} ·  ctx $((${ctx:-0} / 1000))k"
     "${br:-detached}  ·  $up  ·  notes $applied/$notes$( ((notes > applied)) && echo " (${YEL}$((notes - applied)) pending${R})")"
   )
@@ -228,7 +230,7 @@ if ((once)); then
 fi
 
 screen_on
-off=0 total=0 rsig= prev=0 body=() k= rest= nsub=0 focus=0 h=0
+off=0 total=0 rsig='' prev=0 body=() k='' rest='' nsub=0 focus=0 h=0
 while :; do
   cols=$(tput cols) lines=$(tput lines)
   state_of "$repo" "$run"

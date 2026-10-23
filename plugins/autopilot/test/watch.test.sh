@@ -69,7 +69,7 @@ mkstream() {
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"hello there"}]}}'
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"thinking","thinking":""}]}}'
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls","description":"List files"}}]}}'
-    echo '{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","is_error":true,"content":"boom\nmore"}]}}'
+    printf '%s\n' '{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","is_error":true,"content":"boom\nmore"}]}}'
     echo '{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x/y"}}]}}'
   } > "$RUN/sessions/4.jsonl"
   touch -d "@$NOW" "$RUN/sessions/4.jsonl"
@@ -96,7 +96,7 @@ test_board_open_requests() {
   has "$OUT" "b           ack a-1: ok" last
 }
 test_hostile_plan_values() {
-  setup; sed -i 's/^owner-notes-applied: 0/owner-notes-applied: a[$(touch '"$W"'\/pwned)]/' "$PLAN"; echo "- n" > "$RUN/owner.md"
+  setup; sed -i "s/^owner-notes-applied: 0/owner-notes-applied: a[\$(touch ${W//\//\\/}\/pwned)]/" "$PLAN"; echo "- n" > "$RUN/owner.md"
   printf 'now: 1|.*\n' >> "$PLAN"; frame
   [ ! -e "$W/pwned" ] || die "arithmetic injection ran"; has "$OUT" "notes 0/1" notes
 }
@@ -115,5 +115,19 @@ fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
 }
-for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do out=$($f 2>/dev/null); t "$f" "$out" $?; done
+out=$(test_state_working 2>/dev/null); t test_state_working "$out" $?
+out=$(test_state_quiet 2>/dev/null); t test_state_quiet "$out" $?
+out=$(test_state_stalled 2>/dev/null); t test_state_stalled "$out" $?
+out=$(test_state_waiting 2>/dev/null); t test_state_waiting "$out" $?
+out=$(test_state_done 2>/dev/null); t test_state_done "$out" $?
+out=$(test_state_killed_is_red 2>/dev/null); t test_state_killed_is_red "$out" $?
+out=$(test_state_blocked_is_red 2>/dev/null); t test_state_blocked_is_red "$out" $?
+out=$(test_info_rows 2>/dev/null); t test_info_rows "$out" $?
+out=$(test_render_stream 2>/dev/null); t test_render_stream "$out" $?
+out=$(test_fit_width_and_height 2>/dev/null); t test_fit_width_and_height "$out" $?
+out=$(test_board_open_requests 2>/dev/null); t test_board_open_requests "$out" $?
+out=$(test_hostile_plan_values 2>/dev/null); t test_hostile_plan_values "$out" $?
+out=$(test_control_chars_stripped 2>/dev/null); t test_control_chars_stripped "$out" $?
+out=$(test_spaced_repo 2>/dev/null); t test_spaced_repo "$out" $?
+for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

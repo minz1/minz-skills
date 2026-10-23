@@ -21,7 +21,7 @@ test_solo_board_none() {
 test_read_tool() { in_skill 'Read tool'; }
 test_remote_shas_fetched() { in_skill 'fetched it in that session'; }
 test_now_marker() {
-  in_skill 'now: <item number>' 'clear `now:`'
+  in_skill 'now: <item number>' "clear \`now:\`"
   grep -q '^now:' "$PLAN" || die "template lacks now:"
 }
 test_usage_line() { in_skill 'usage: /autopilot '; }
@@ -37,6 +37,7 @@ out=$(test_stop_hygiene 2>/dev/null); t test_stop_hygiene "$out" $?
 out=$(test_solo_board_none 2>/dev/null); t test_solo_board_none "$out" $?
 out=$(test_read_tool 2>/dev/null); t test_read_tool "$out" $?
 out=$(test_remote_shas_fetched 2>/dev/null); t test_remote_shas_fetched "$out" $?
+out=$(test_now_marker 2>/dev/null); t test_now_marker "$out" $?
 out=$(test_usage_line 2>/dev/null); t test_usage_line "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

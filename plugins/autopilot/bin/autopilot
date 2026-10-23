@@ -32,7 +32,7 @@ if [ "$cmd" = dash ]; then
   for _ in $(seq 20); do T has-session 2>/dev/null || break; sleep 0.1; done
   board=
   for r in "${repos[@]}"; do
-    pane='exec bash "$AP_WATCH" "$AP_REPO"'
+    pane="exec bash \"\$AP_WATCH\" \"\$AP_REPO\""
     if T has-session -t =dash 2>/dev/null; then
       T split-window -t =dash: -e "AP_WATCH=$bin/autopilot-watch" -e "AP_REPO=$r" "$pane"
       T select-layout -t =dash: tiled
@@ -49,7 +49,7 @@ if [ "$cmd" = dash ]; then
   T select-layout -t =dash: tiled
   if [ -n "$board" ]; then
     n=$(find "$board" -maxdepth 1 -name '*.md' | wc -l)
-    T split-window -f -v -l $((n + 1)) -t =dash: -e "AP_WATCH=$bin/autopilot-watch" -e "AP_BOARD=$board" 'exec bash "$AP_WATCH" board "$AP_BOARD"'
+    T split-window -f -v -l $((n + 1)) -t =dash: -e "AP_WATCH=$bin/autopilot-watch" -e "AP_BOARD=$board" "exec bash \"\$AP_WATCH\" board \"\$AP_BOARD\""
   fi
   T select-pane -t =dash:0.0
   T set -g mouse on \; set -g focus-events on \; set -g pane-border-lines heavy \
