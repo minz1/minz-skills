@@ -69,6 +69,29 @@ stop_watchdog() {
   wd=
 }
 
+self_path=$(readlink -f "$0")
+vdir=${self_path%/bin/autopilot-runner}
+skipped_upgrade=
+
+self_upgrade() {
+  local p r new=
+  [ "${AUTOPILOT_NO_UPGRADE:-}" != 1 ] || return 0
+  while IFS= read -r p; do
+    r=$(readlink -f "$p") || continue
+    [[ $r == "${vdir%/*}/"* ]] && new=$r && break
+  done < <(jq -r '.plugins[]?[]? | .installPath? // empty' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
+  [ -n "$new" ] && [ "$new" != "$vdir" ] && [ -f "$new/bin/autopilot-runner" ] || return 0
+  if ! bash -n "$new/bin/autopilot-runner" 2>/dev/null; then
+    [ "$skipped_upgrade" = "$new" ] || log "upgrade skipped: $new fails bash -n"
+    skipped_upgrade=$new
+    return 0
+  fi
+  log "upgrade ${vdir##*/} -> ${new##*/}"
+  rm -f "$idx" "$idx.lock"
+  AUTOPILOT_RESUME_MODE=$mode AUTOPILOT_RESUME_REASON=$reason AUTOPILOT_RESUME_CRASHES=$crashes \
+    exec bash "$new/bin/autopilot-runner" "$repo" "$run"
+}
+
 stop() {
   log "stopped: $1"
   echo "stopped: $1" >> "$run/log.md"
@@ -228,10 +251,16 @@ resume_wait() {
 }
 
 mkdir -p "$HOME/.autopilot" "$run/sessions"
-read_header || { echo "autopilot-runner: $bad" >&2; exit 2; }
+if ! read_header; then
+  [ -z "$exec_path" ] || stop "$bad"
+  echo "autopilot-runner: $bad" >&2
+  exit 2
+fi
+log "runner start version=${vdir##*/}"
 [ -n "$exec_path" ] || resume_wait
 
 while :; do
+  self_upgrade
   [ ! -e "$run/STOP" ] || stop "stop file"
   read_header || stop "$bad"
   if [ "$mode" != wrapup ] && [ "$(work_sessions)" -ge "$cap" ]; then

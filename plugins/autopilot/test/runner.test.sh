@@ -331,6 +331,70 @@ test_stall_rearms() {
   waitfor "$W/notified" "stopped done"
   eq "$(grep -c 'stalled session 1' "$W/notified")" 2 "stalled lines"
 }
+fake_cache() {
+  CACHE=$HOME/.claude/plugins/cache/m/autopilot
+  local v
+  for v in "$@"; do mkdir -p "$CACHE/$v/bin"; cp "$RUNNER" "$CACHE/$v/bin/autopilot-runner"; done
+}
+install_v() {
+  mkdir -p "$HOME/.claude/plugins"
+  printf '{"version":2,"plugins":{"autopilot@m":[{"scope":"user","installPath":"%s"}]}}\n' "$HOME/.claude/plugins/cache/m/autopilot/$1" > "$HOME/.claude/plugins/installed_plugins.json"
+}
+export -f install_v
+go_from() {
+  OUT=$(bash "$CACHE/$1/bin/autopilot-runner" "$repo" .autopilot/runs/t 2>"$W/err")
+  RC=$?
+  ERR=$(cat "$W/err")
+}
+test_upgrade_execs_new_version() {
+  setup; fake_cache v1 v2; install_v v1
+  sc 1 "$NEXT" '{"exec":"install_v v2"}'; sc 2 "$DONE"; go_from v1
+  log_has "runner start version=v1"; log_has "upgrade v1 -> v2"; log_has "runner start version=v2"
+  expect_calls 2; call_has 2 "autopilot continue"; stopped done
+}
+test_upgrade_carries_wrapup() {
+  setup; fake_cache v1 v2; install_v v1
+  sc 1 "$NEXT" "$(jq -nc '{exec: "install_v v2", usage: {weekly: 0.81, five_hour: 0.1}}')"; sc 2 "$DONE"; go_from v1
+  log_has "upgrade v1 -> v2"; call_has 2 "autopilot wrapup"; stopped "weekly usage 0.81"
+}
+test_upgrade_refuses_bad_syntax() {
+  setup; fake_cache v1 v2; echo 'if' >> "$CACHE/v2/bin/autopilot-runner"; install_v v2
+  sc 1 "$NEXT"; sc 2 "$NEXT"; sc 3 "$DONE"; go_from v1
+  eq "$(grep -c 'upgrade skipped: ' "$LOG")" 1 "skip lines"; log_lacks "version=v2"; expect_calls 3
+}
+test_upgrade_symlink_same() {
+  setup; fake_cache v1; ln -s "$CACHE/v1" "$CACHE/link"; install_v link
+  sc 1 "$NEXT"; sc 2 "$DONE"; go_from v1
+  log_lacks "upgrade"; expect_calls 2
+}
+test_no_upgrade_from_worktree() {
+  setup; fake_cache v2; install_v v2; sc 1 "$NEXT"; sc 2 "$DONE"; go
+  log_lacks "upgrade"
+}
+test_no_upgrade_missing_json() {
+  setup; fake_cache v1 v2; sc 1 "$NEXT"; sc 2 "$DONE"; go_from v1
+  log_lacks "upgrade"; stopped done
+}
+test_no_upgrade_garbage_json() {
+  setup; fake_cache v1 v2; mkdir -p "$HOME/.claude/plugins"; echo '{nope' > "$HOME/.claude/plugins/installed_plugins.json"
+  sc 1 "$NEXT"; sc 2 "$DONE"; go_from v1
+  log_lacks "upgrade"; stopped done
+}
+test_no_upgrade_pinned() {
+  setup; fake_cache v1 v2; install_v v2; sc 1 "$NEXT"; sc 2 "$DONE"
+  AUTOPILOT_NO_UPGRADE=1 go_from v1
+  log_lacks "upgrade"; stopped done
+}
+test_exec_path_bad_header_stops() {
+  setup; hook; sed -i '/^weekly-ceiling:/d' "$PLAN"; sc 1 "$DONE"
+  AUTOPILOT_RESUME_MODE=continue go
+  expect_calls 0; stopped ".autopilot/runs/t/plan.md has no valid weekly-ceiling"
+  waitfor "$W/notified" "stopped .autopilot/runs/t/plan.md has no valid weekly-ceiling"
+}
+test_runner_start_after_header() {
+  setup; sed -i '/^weekly-ceiling:/d' "$PLAN"; sc 1 "$DONE"; go
+  [ ! -s "$LOG" ] || die "log written: $(cat "$LOG")"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook '[ $1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0'; go
