@@ -158,9 +158,13 @@ case $cmd in
       state=running
       if [[ $lastl == *" start "* ]]; then
         state="running, ${last/=/ } since ${lastl%% *}"
-      elif [[ $lastl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?\" ]] && ! grep -q '^[^ ]* woke ' <<<"$after"; then
-        m=${BASH_REMATCH[1]} pids=${BASH_REMATCH[3]}
-        state="running, waiting until $(date -u -d "@$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60))" +%FT%TZ) (WAIT $m from ${last/=/ }${pids:+, pids $pids})"
+      elif [[ $lastl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?(\ ack=([A-Za-z0-9_.,-]+))?\" ]] && ! grep -q '^[^ ]* woke ' <<<"$after"; then
+        m=${BASH_REMATCH[1]} pids=${BASH_REMATCH[3]} acks=${BASH_REMATCH[5]}
+        if [ -n "$acks" ]; then
+          state="running, waiting for ack $acks (alert at $(date -u -d "@$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60))" +%FT%TZ), from ${last/=/ })"
+        else
+          state="running, waiting until $(date -u -d "@$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60))" +%FT%TZ) (WAIT $m from ${last/=/ }${pids:+, pids $pids})"
+        fi
       elif [[ $lastl == *" exit=limit "* ]]; then
         state="running, napping until the usage limit resets"
       fi
