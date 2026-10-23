@@ -406,6 +406,12 @@ test_board_trailing_space() {
   grep -qE '^- [0-9T:-]+Z \[to p\] x$' "$R2/owner.md" || die "owner.md: $(cat "$R2/owner.md")"
 }
 
+test_status_waiting_for_ack() {
+  setup; tmux new-session -d -s autopilot-repo 'sleep 600'
+  printf '%s session=3 end exit=WAIT detail="360 ack=repo-7" w\n' "$(date -u +%FT%TZ)" > "$LOG"
+  ap status; has "$OUT" "running, waiting for ack repo-7 (alert at " status
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -458,5 +464,6 @@ out=$(test_note_to_without_board 2>/dev/null); t test_note_to_without_board "$ou
 out=$(test_note_warns_done_item 2>/dev/null); t test_note_warns_done_item "$out" $?
 out=$(test_dash_spaced_repo_from_start 2>/dev/null); t test_dash_spaced_repo_from_start "$out" $?
 out=$(test_board_trailing_space 2>/dev/null); t test_board_trailing_space "$out" $?
+out=$(test_status_waiting_for_ack 2>/dev/null); t test_status_waiting_for_ack "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

@@ -152,6 +152,11 @@ test_interactive_keys() {
   tmux -L wt kill-server
 }
 
+test_state_waiting_for_ack() {
+  setup; live; session_start 3 999; session_end 3 'WAIT detail="360 ack=repo-7"' 300; frame
+  has "$(first)" "WAITING for ack repo-7" header
+}
+
 fail=0
 t() {
   if [ "$3" = 0 ] && [ -z "$2" ]; then echo "ok $1"; else echo "FAIL $1: rc=$3 $2"; fail=1; fi
@@ -176,5 +181,6 @@ out=$(test_dash_row4_owner_count 2>/dev/null); t test_dash_row4_owner_count "$ou
 out=$(test_tiny_widths 2>/dev/null); t test_tiny_widths "$out" $?
 out=$(test_rollback_line_is_not_an_answer 2>/dev/null); t test_rollback_line_is_not_an_answer "$out" $?
 out=$(test_interactive_keys 2>/dev/null); t test_interactive_keys "$out" $?
+out=$(test_state_waiting_for_ack 2>/dev/null); t test_state_waiting_for_ack "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

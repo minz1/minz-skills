@@ -101,10 +101,14 @@ state_of() { # <repo> [run] -> st label stream info[]
     else st=working label="WORKING s$n"; fi
   elif ((live)); then
     st=waiting label=WAITING
-    if [[ $lastl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?\" ]] && ! grep -q '^[^ ]* woke ' <<<"$after"; then
-      m=${BASH_REMATCH[1]} r=${BASH_REMATCH[3]}
-      t=$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60 - now))
-      label+=" next ≤$(ago $((t > 0 ? t : 0)))${r:+ · pid ${r//,/ }}"
+    if [[ $lastl =~ \ exit=WAIT\ detail=\"([0-9]+)(\ pid=([0-9,]+))?(\ ack=([A-Za-z0-9_.,-]+))?\" ]] && ! grep -q '^[^ ]* woke ' <<<"$after"; then
+      m=${BASH_REMATCH[1]} r=${BASH_REMATCH[3]} t=${BASH_REMATCH[5]}
+      if [ -n "$t" ]; then
+        label+=" for ack ${t//,/ }"
+      else
+        t=$(($(date -u -d "${lastl%% *}" +%s) + 10#$m * 60 - now))
+        label+=" next ≤$(ago $((t > 0 ? t : 0)))${r:+ · pid ${r//,/ }}"
+      fi
     elif [[ $lastl == *" exit=limit "* ]]; then
       label+=" · usage limit"
     fi
