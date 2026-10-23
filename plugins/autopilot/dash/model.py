@@ -416,3 +416,77 @@ def burn(runs: list[tuple[RunRef, RunFiles]], global_ceiling: float | None, now:
             text = f"  ·  {clean(ref.repo.name)} wraps at {round(ceiling * 100)}% ~{hhmm(eta)}Z"
             out.append(text, style="yellow" if eta - now < 3 * 3600 else "")
     return out
+
+
+QUEUE_ITEM = re.compile(r"^- \[(x| |c|p|!!?)\] *(\d+\.)?(.*)$")
+QUEUE_MARK = {"x": "green", " ": "", "c": "yellow", "p": "blue", "!": "bold red", "!!": "bold red"}
+TAIL_START = re.compile(r"\s{2,}(after|check|waiting|progress):")
+CODE_STYLE = "bold cyan"
+LOGMD_LINES = 400
+BOARD_LINE = re.compile(r"^- (\S+Z )?(.*)$")
+BOARD_HEAD = re.compile(
+    r"^((?:ack|nack|reject|watch|done)\b[^:]*:?|owner → [^:]*:"
+    r"|[A-Za-z0-9_.-]+-\d+(?: \(replaces [^)]*\))? → [^:]*:|[A-Za-z0-9_.-]+: runner stopped)"
+)
+
+
+def queue_text(plan: str) -> Text:
+    """Style a plan's queue items and headings for the detail screen."""
+    out = Text()
+    for line in plan.splitlines():
+        if m := QUEUE_ITEM.match(line):
+            mark = m.group(1)
+            out.append(f"[{mark}] ", style=QUEUE_MARK[mark])
+            out.append((m.group(2) or "") + " ", style="bold")
+            body = clean(m.group(3))
+            tail = TAIL_START.search(body)
+            out.append(body[: tail.start()] if tail else body, style="dim" if mark == "x" else "")
+            if tail:
+                out.append(body[tail.start() :], style="dim italic")
+            out.append("\n")
+        elif line.startswith("#"):
+            out.append(clean(line.lstrip("# ")) + "\n", style="bold underline")
+    return out
+
+
+def logmd_text(log_md: str) -> Text:
+    """Style the last lines of log.md as text, with headings and code spans."""
+    out = Text()
+    for line in clean(log_md).splitlines()[-LOGMD_LINES:]:
+        if line.startswith("## "):
+            out.append(line[3:], style="bold")
+        else:
+            for i, part in enumerate(line.split("`")):
+                out.append(part, style=CODE_STYLE if i % 2 else "")
+        out.append("\n")
+    out.rstrip()
+    return out
+
+
+def board_style(head: str) -> str:
+    """Pick the style of a board line's head."""
+    if head.startswith("ack"):
+        return "green"
+    if head.startswith(("nack", "reject")) or "runner stopped" in head:
+        return "bold red"
+    if head.startswith("owner"):
+        return "magenta"
+    return "bold green" if head.startswith("done") else "cyan"
+
+
+def board_text(board: Path) -> Text:
+    """Style every board file, one section per file."""
+    out = Text()
+    for f, lines in board_lines(board):
+        out.append(f"{clean(f.stem)}\n", style="bold reverse")
+        for line in lines:
+            if not (m := BOARD_LINE.match(line)):
+                continue
+            body = clean(m.group(2))
+            out.append("  " + (m.group(1) or ""), style="dim")
+            head = h.group(1) if (h := BOARD_HEAD.match(body)) else ""
+            out.append(head, style=board_style(head) if head else "")
+            out.append(body[len(head) :] + "\n")
+        out.append("\n")
+    out.rstrip()
+    return out

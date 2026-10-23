@@ -7,6 +7,7 @@ from pathlib import Path
 
 import model
 from conftest import MakeRun
+from rich.text import Text
 
 NOW = float(calendar.timegm((2026, 10, 23, 15, 0, 0, 0, 0, 0)))
 
@@ -248,3 +249,55 @@ def test_board_of(tmp_path: Path) -> None:
     assert model.board_of("board: none\n", home) is None
     assert model.board_of("board: ~/nope\n", home) is None
     assert model.board_of("", home) is None
+
+
+def styles_of(text: Text, part: str) -> set[str]:
+    """Collect the styles of spans covering a substring."""
+    start = text.plain.index(part)
+    return {str(s.style) for s in text.spans if s.start <= start < s.end}
+
+
+def test_queue_styles() -> None:
+    """Queue marks, numbers, tails and headings get their styles."""
+    plan = "## Queue\n- [x] 1. done thing\n- [!] 2. stuck  waiting: owner\n- [c] 3. c\n- [p] 4. p\n- [ ] 5. open\n"
+    t = model.queue_text(plan)
+    assert "green" in styles_of(t, "[x]")
+    assert "dim" in styles_of(t, "done thing")
+    assert "bold red" in styles_of(t, "[!]")
+    assert "bold" in styles_of(t, "2.")
+    assert "dim italic" in styles_of(t, "waiting: owner")
+    assert "yellow" in styles_of(t, "[c]")
+    assert "blue" in styles_of(t, "[p]")
+    assert "bold underline" in styles_of(t, "Queue")
+
+
+def test_logmd_styles() -> None:
+    """Log.md headings are bold, bullets stay, backtick spans are highlighted, and only 400 lines are kept."""
+    log = "".join(f"- old {i}\n" for i in range(500)) + "## Session 9\n- ran `make test` [/x]\n"
+    t = model.logmd_text(log)
+    assert len(t.plain.splitlines()) == 400
+    assert "bold" in styles_of(t, "Session 9")
+    assert "- ran " in t.plain
+    assert model.CODE_STYLE in styles_of(t, "make test")
+    assert "`" not in t.plain
+    assert "[/x]" in t.plain
+
+
+def test_board_styles(tmp_path: Path) -> None:
+    """Board lines get their head styles."""
+    b = tmp_path / "b"
+    b.mkdir()
+    (b / "a.md").write_text(
+        "- 2026-10-23T14:00Z a-1 → x: hi\n- ack x-1: ok\n- nack x-2: no\n- reject x-3: no\n"
+        "- 2026-10-23T13:59:49Z owner → x: do it\n- done a-1\n- a: runner stopped 2026-10-23T14:40:32Z: done\n"
+    )
+    t = model.board_text(b)
+    assert "a" in t.plain.splitlines()[0]
+    assert "dim" in styles_of(t, "2026-10-23T14:00Z")
+    assert "cyan" in styles_of(t, "a-1 → x:")
+    assert "green" in styles_of(t, "ack x-1")
+    assert "bold red" in styles_of(t, "nack x-2")
+    assert "bold red" in styles_of(t, "reject x-3")
+    assert "magenta" in styles_of(t, "owner → x:")
+    assert "bold green" in styles_of(t, "done a-1")
+    assert "bold red" in styles_of(t, "a: runner stopped")

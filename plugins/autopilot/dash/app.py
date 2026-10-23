@@ -21,7 +21,8 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     Footer,
@@ -43,6 +44,7 @@ MIN_PANE = 12
 REFRESH_S = 2
 GIT_S = 10
 SEEN_DEFAULT_S = 4 * 3600
+MAIN_ACTIONS = {"quit", "note", "control", "detail", "show_tab", "show_all", "flip", "follow", "pane"}
 COLORS = {
     "working": "green",
     "waiting": "blue",
@@ -339,6 +341,87 @@ class RunDialog(ModalScreen[list[str] | None]):
             self.dismiss(actions.control_argv(self.ap_bin, self.ref.run_dir.name, what))
 
 
+DETAIL_TABS = ("Last session", "Handoff", "Queue", "Owner", "log.md", "Board")
+
+
+class DetailScreen(Screen[None]):
+    """One run's last result, handoff, queue, owner items, log.md and board."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape,q", "back", "back"),
+        Binding("left", "step(-1)", "prev tab"),
+        Binding("right", "step(1)", "next tab"),
+        *[Binding(str(i), f"goto({i})", show=False) for i in range(1, len(DETAIL_TABS) + 1)],
+    ]
+    DEFAULT_CSS = """
+    DetailScreen TabbedContent { height: 1fr; }
+    DetailScreen TabbedContent > ContentSwitcher { height: 1fr; }
+    DetailScreen TabPane { height: 1fr; padding: 0 1; }
+    """
+
+    def __init__(self, shown: Shown, home: Path) -> None:
+        """Hold the run to show."""
+        super().__init__()
+        self.shown, self.home = shown, home
+        self.built: set[str] = set()
+
+    def compose(self) -> ComposeResult:
+        """Lay out empty tabs; each is filled when first shown."""
+        with TabbedContent(initial="d1"):
+            for i, title in enumerate(DETAIL_TABS, 1):
+                yield TabPane(f"{i} {title}", id=f"d{i}")
+        yield Footer()
+
+    def last_result(self) -> str:
+        """Return the newest session result, falling back to the session before a running one."""
+        n = self.shown.state.session
+        sessions = self.shown.ref.run_dir / "sessions"
+        if not n.isdigit():
+            return ""
+        return stream.session_result(sessions / f"{n}.jsonl") or stream.session_result(sessions / f"{int(n) - 1}.jsonl")
+
+    def content(self, tab: str) -> Widget:
+        """Build one tab's content."""
+        plan = self.shown.files.plan
+        if tab == "d3":
+            return Static(model.queue_text(plan), markup=False)
+        if tab == "d5":
+            return Static(model.logmd_text(self.shown.files.log_md), markup=False)
+        if tab == "d6":
+            board = model.board_of(plan, self.home)
+            return Static(model.board_text(board) if board else Text("(no board)", style="dim"), markup=False)
+        md = {
+            "d1": self.last_result() or "_no session result yet_",
+            "d2": "\n".join(model.section(plan, "Handoff")) or "_no handoff_",
+            "d4": "\n".join(model.section(plan, "Owner")) or "_nothing is waiting on you_",
+        }[tab]
+        return Markdown(model.clean(md), open_links=False)
+
+    async def on_tabbed_content_tab_activated(self, e: TabbedContent.TabActivated) -> None:
+        """Build a tab the first time it is shown."""
+        tab = e.pane.id or ""
+        if tab not in self.built:
+            self.built.add(tab)
+            view = VerticalScroll(self.content(tab))
+            await e.pane.mount(view)
+            if tab == "d5":
+                self.call_after_refresh(view.scroll_end, animate=False)
+
+    def action_step(self, step: int) -> None:
+        """Move to the next or previous tab."""
+        tabs = self.query_one(TabbedContent)
+        n = int((tabs.active or "d1")[1:])
+        tabs.active = f"d{(n - 1 + step) % len(DETAIL_TABS) + 1}"
+
+    def action_goto(self, n: int) -> None:
+        """Show tab n."""
+        self.query_one(TabbedContent).active = f"d{n}"
+
+    def action_back(self) -> None:
+        """Go back to the dash."""
+        self.dismiss(None)
+
+
 class Dash(App[None]):
     """The autopilot dashboard."""
 
@@ -366,6 +449,7 @@ class Dash(App[None]):
         Binding("q", "quit", "quit"),
         Binding("n", "note", "note"),
         Binding("r", "control", "start/stop"),
+        Binding("enter", "detail", "details"),
         Binding("g", "show_tab('runs')", "runs"),
         Binding("f", "show_tab('feed-tab')", "feed"),
         Binding("o", "show_tab('owner')", "owner"),
@@ -445,6 +529,13 @@ class Dash(App[None]):
             self.seen_path.write_text(f"{self.seen}\n")
         except OSError:
             self.logger.exception("could not write %s", self.seen_path)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Keep the main screen's keys off dialogs and the detail screen."""
+        del parameters
+        if action in MAIN_ACTIONS:
+            return self.screen is self.screen_stack[0]
+        return True
 
     def on_mount(self) -> None:
         """Start refreshing."""
@@ -728,6 +819,13 @@ class Dash(App[None]):
         if (p := self.focused_pane()) and not p.ref.missing:
             repo = p.ref.repo
             self.push_screen(RunDialog(self.ap_bin, p.ref), lambda argv: self.send_argv(argv, repo))
+
+    def action_detail(self) -> None:
+        """Open the detail screen for the focused pane's run."""
+        if (p := self.focused_pane()) and not p.ref.missing:
+            shown = next((s for s in self.snapshot.runs if s.ref == p.ref), None)
+            if shown:
+                self.push_screen(DetailScreen(shown, self.home))
 
     def send_argv(self, argv: list[str] | None, cwd: Path) -> None:
         """Run a dialog's argv unless it was cancelled."""

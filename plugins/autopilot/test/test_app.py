@@ -2,6 +2,7 @@
 """Pilot tests for the Textual dashboard."""
 
 import calendar
+import gc
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -13,7 +14,18 @@ import pytest
 from conftest import MakeRun
 from rich.text import Text
 from textual.pilot import Pilot
-from textual.widgets import Button, Input, Label, ListView, Markdown, RadioButton, RichLog, TabbedContent
+from textual.widgets import (
+    Button,
+    Input,
+    Label,
+    ListView,
+    Markdown,
+    RadioButton,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 NOW = float(calendar.timegm((2026, 10, 23, 15, 0, 0, 0, 0, 0)))
 Sessions = Callable[[], Awaitable[dict[str, Path]]]
@@ -271,6 +283,8 @@ async def test_key_budget(isolated: Path, make_run: MakeRun) -> None:
     d = dash(isolated, live(*repos))
     async with d.run_test(size=(200, 50)) as pilot:
         await settle(pilot)
+
+        gc.collect()
 
         async def timed(key: str) -> float:
             best = 1e9
@@ -602,3 +616,105 @@ async def test_owner_empty_message(isolated: Path, make_run: MakeRun) -> None:
         await pilot.pause()
         assert tab_label(d, "owner") == "Owner"
         assert "nothing is waiting on you" in d.query_one("#owner-text", Markdown).source
+
+
+def detail_run(make_run: MakeRun, log_md: str = "## s1\n- did `x`\n") -> Path:
+    """Build a live run with a finished session, a plan and a board for the detail screen."""
+    result = {"type": "result", "result": "# Done\n\nshipped **1.2**\n\nAUTOPILOT: NEXT"}
+    log = f'{iso(NOW - 600)} session=1 end exit=NEXT detail="" weekly=0.2\n{iso(NOW - 60)} session=2 start\n'
+    plan = "session-cap: 9\n## Queue\n- [x] 1. a\n- [ ] 2. b\n## Owner\n- choose\n## Handoff\nnext: b\n"
+    return make_run("a", plan=plan, log=log, log_md=log_md, sessions={1: [result]}, board={"a.md": "- ack x-1: ok\n"})
+
+
+def detail_tabs(d: app.Dash) -> TabbedContent:
+    """Return the detail screen's tabs."""
+    assert isinstance(d.screen, app.DetailScreen)
+    return d.screen.query_one(TabbedContent)
+
+
+async def test_detail_tabs_keys(isolated: Path, make_run: MakeRun) -> None:
+    """Arrows and digits switch detail tabs; Esc and q go back without quitting."""
+    repo = repo_of(detail_run(make_run))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter")
+        assert detail_tabs(d).active == "d1"
+        await pilot.press("right")
+        assert detail_tabs(d).active == "d2"
+        await pilot.press("left", "left")
+        assert detail_tabs(d).active == "d6"
+        await pilot.press("3")
+        assert detail_tabs(d).active == "d3"
+        await pilot.press("g", "f", "o", "n", "r", "a", "s", "7", "enter")
+        await pilot.pause()
+        assert detail_tabs(d).active == "d3"
+        assert d.is_running
+        await pilot.press("escape")
+        assert not isinstance(d.screen, app.DetailScreen)
+        await pilot.press("enter", "q")
+        assert not isinstance(d.screen, app.DetailScreen)
+        assert d.is_running
+
+
+async def test_detail_lazy_tabs(isolated: Path, make_run: MakeRun) -> None:
+    """Only the first detail tab is built until another is shown."""
+    repo = repo_of(detail_run(make_run))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = d.screen
+        built = {p.id: bool(p.children) for p in screen.query(TabPane)}
+        assert built == {"d1": True, "d2": False, "d3": False, "d4": False, "d5": False, "d6": False}
+        assert "shipped **1.2**" in screen.query_one("#d1 Markdown", Markdown).source
+        await pilot.press("5")
+        await pilot.pause()
+        assert screen.query_one("#d5").children
+        assert not screen.query_one("#d4").children
+
+
+async def test_logmd_is_text(isolated: Path, make_run: MakeRun) -> None:
+    """The log.md tab is styled text, not Markdown."""
+    repo = repo_of(detail_run(make_run))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter", "5")
+        await pilot.pause()
+        tab = d.screen.query_one("#d5")
+        assert not list(tab.query(Markdown))
+        assert isinstance(tab.query_one(Static).content, Text)
+        await pilot.press("6")
+        await pilot.pause()
+        assert "ack x-1" in str(d.screen.query_one("#d6").query_one(Static).content)
+
+
+async def test_detail_open_budget(isolated: Path, make_run: MakeRun) -> None:
+    """Opening the detail screen paints within 150 ms with a 66 KB log.md."""
+    log_md = "".join(f"- line {i} with `code` and words to pad it out a bit more\n" for i in range(1200))
+    assert len(log_md) > 66_000
+    repo = repo_of(detail_run(make_run, log_md))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        gc.collect()
+        best = base = 1e9
+        for _ in range(3):
+            t0 = time.perf_counter()
+            await pilot.press("z")
+            await pilot.pause()
+            base = min(base, time.perf_counter() - t0)
+            t0 = time.perf_counter()
+            await pilot.press("enter")
+            await pilot.pause()
+            best = min(best, time.perf_counter() - t0)
+            assert isinstance(d.screen, app.DetailScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+        assert best - base < 0.15
