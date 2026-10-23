@@ -518,6 +518,27 @@ test_resume_ack_wait() {
   setup; board_setup; prior_wait 60 "360 ack=repo-3"; echo '- ack repo-3: ok' >> "$BOARD/peer.md"; sc 1 "$DONE"; go
   log_has "resume wait"; log_has "woke reason=ack:repo-3 after=0s"
 }
+test_wait_ack_answered_loop_capped() {
+  setup; hook; board_setup; echo 'ack-timeout: 1m' >> "$PLAN"; echo '- ack repo-3: queued' >> "$BOARD/peer.md"
+  sc 1 "AUTOPILOT: WAIT ack repo-3"; sc 2 "AUTOPILOT: WAIT ack repo-3"; sc 3 "$DONE"; go
+  expect_calls 3; eq "$(grep -c 'woke reason=ack:repo-3 after=0s' "$LOG")" 1 "instant wakes"
+  log_has "ack repo-3 was already answered"; log_has "woke reason=timeout after=60s"
+  waitfor "$W/notified" "session keeps waiting on ack repo-3"
+}
+test_ack_timeout_zero_hours_defaults() {
+  setup; board_setup; echo 'ack-timeout: 0h' >> "$PLAN"; sc 1 "AUTOPILOT: WAIT ack repo-3"; sc 2 "$DONE"
+  nap_hook "[ \$1 -eq 1 ] && echo '- ack repo-3: ok' >> '$BOARD/peer.md'; exit 0"; go
+  log_has 'detail="360 ack=repo-3"'
+}
+test_resume_ack_wait_alerts_on_timeout() {
+  setup; hook; board_setup; prior_wait 30 "1 ack=repo-3"; sc 1 "$DONE"; go
+  log_has "resume wait"; log_has "woke reason=timeout"; waitfor "$W/notified" "stalled ack repo-3 overdue"
+}
+test_plain_wait_ignores_peer_stop_line() {
+  setup; board_setup; board_wait 1
+  nap_hook "[ \$1 -eq 1 ] && echo '- peer: runner stopped 2026-10-23T12:00:00Z: done' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=timeout"
+}
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook "[ \$1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0"; go
@@ -866,6 +887,10 @@ out=$(test_wait_ack_hours_and_minutes 2>/dev/null); t test_wait_ack_hours_and_mi
 out=$(test_wait_ack_peer_stop_wakes 2>/dev/null); t test_wait_ack_peer_stop_wakes "$out" $?
 out=$(test_wait_ack_bad_id_is_crash 2>/dev/null); t test_wait_ack_bad_id_is_crash "$out" $?
 out=$(test_resume_ack_wait 2>/dev/null); t test_resume_ack_wait "$out" $?
+out=$(test_wait_ack_answered_loop_capped 2>/dev/null); t test_wait_ack_answered_loop_capped "$out" $?
+out=$(test_ack_timeout_zero_hours_defaults 2>/dev/null); t test_ack_timeout_zero_hours_defaults "$out" $?
+out=$(test_resume_ack_wait_alerts_on_timeout 2>/dev/null); t test_resume_ack_wait_alerts_on_timeout "$out" $?
+out=$(test_plain_wait_ignores_peer_stop_line 2>/dev/null); t test_plain_wait_ignores_peer_stop_line "$out" $?
 out=$(test_limit_nap_wakes_on_stop 2>/dev/null); t test_limit_nap_wakes_on_stop "$out" $?
 out=$(test_wait_bad_minutes_is_crash 2>/dev/null); t test_wait_bad_minutes_is_crash "$out" $?
 out=$(test_template_plan_starts 2>/dev/null); t test_template_plan_starts "$out" $?

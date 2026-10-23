@@ -11,6 +11,7 @@ child=
 wd=
 wait_pids=''
 wait_acks=''
+last_ack_woke=''
 pre_owner=
 woke=
 board_streak=0
@@ -187,7 +188,6 @@ addressed() {
       [[ " ${r//,/ } " == *" $repo_name "* ]] && return 0
     fi
     [[ $l =~ ^-\ ([0-9T:-]+Z\ )?done\ [A-Za-z0-9_.-]+ ]] && return 0
-    [[ $l =~ ^-\ [A-Za-z0-9_.-]+:\ runner\ stopped\  ]] && return 0
   done <<<"$1"
   grep -oE '^- ([0-9T:-]+Z )?((ack|nack|reject) )+[A-Za-z0-9_.-]+-[0-9]+' <<<"$1" | sed -E 's/.* //; s/-[0-9]+$//' | grep -qxF -- "$repo_name"
 }
@@ -195,7 +195,7 @@ addressed() {
 ack_timeout() { # minutes from the plan's ack-timeout (6h default): 90, 90m, 6h
   local v
   v=$(header_value ack-timeout)
-  if [[ $v =~ ^([0-9]+)h$ ]]; then echo $((10#${BASH_REMATCH[1]} * 60))
+  if [[ $v =~ ^([0-9]+)h$ ]] && ((10#${BASH_REMATCH[1]} > 0)); then echo $((10#${BASH_REMATCH[1]} * 60))
   elif [[ $v =~ ^([0-9]+)m?$ ]] && ((10#${BASH_REMATCH[1]} > 0)); then echo $((10#${BASH_REMATCH[1]}))
   else echo 360; fi
 }
@@ -213,8 +213,8 @@ wake_check() {
   wake=
   [ "$(count_notes)" -le "${base_notes:-0}" ] || { wake=note; return; }
   for p in $wait_pids; do alive "$p" || { wake="pid:$p"; return; }; done
-  for p in $wait_acks; do answered "$p" && { wake="ack:$p"; return; }; done
   [ "$1" = full ] || [ "$1" = ack ] || return 0
+  for p in $wait_acks; do [ "$p" = - ] || ! answered "$p" || { wake="ack:$p"; return; }; done
   while IFS= read -r f; do
     cur=$(wc -l < "$f") b=${base_board[$f]:-0}
     ((cur >= b)) || b=0
@@ -242,6 +242,8 @@ nap() {
   done
   log "woke reason=$r after=${el}s"
   woke=$r
+  [ "$r" != timeout ] || [ -z "${wait_acks#-}" ] || notify stalled "ack ${wait_acks// /,} overdue ($((total / 60))m)"
+  if [[ $r == ack:* ]]; then last_ack_woke=${r#ack:}; else last_ack_woke=''; fi
 }
 
 checkpoint() {
@@ -263,8 +265,17 @@ parse_word() {
     WAIT\ ack\ *)
       m=${word#WAIT ack }
       [[ $m =~ ^[A-Za-z0-9_.-]+-[0-9]+(,[A-Za-z0-9_.-]+-[0-9]+)*$ ]] || return
-      wait_acks=${m//,/ }
-      kind=WAIT detail="$(ack_timeout) ack=$m"
+      for p in ${m//,/ }; do
+        if [ "$p" = "$last_ack_woke" ] && answered "$p"; then
+          log "ack $p was already answered and woke the last wait; waiting on the backstop only"
+          notify stalled "session keeps waiting on ack $p, which is already answered"
+        else
+          wait_acks+=" $p"
+        fi
+      done
+      wait_acks=${wait_acks# }
+      kind=WAIT detail="$(ack_timeout) ack=${wait_acks// /,}"
+      [ -n "$wait_acks" ] || { detail=$(ack_timeout); wait_acks=-; }
       ;;
     WAIT\ *)
       m=${word#WAIT }
@@ -397,8 +408,7 @@ while :; do
       nap $((${detail%% *} * 60)) noboard
     else
       nap $((${detail%% *} * 60)) "$( [ -n "$wait_acks" ] && echo ack || echo full)"
-      [ "$woke" != timeout ] || [ -z "$wait_acks" ] || notify stalled "ack ${wait_acks// /,} overdue (${detail%% *}m)"
-      if [[ $woke == board:* ]]; then board_streak=$((board_streak + 1)); else board_streak=0; fi
+      if [[ $woke == board:* || $woke == ack:* ]]; then board_streak=$((board_streak + 1)); else board_streak=0; fi
     fi
   else
     board_streak=0
