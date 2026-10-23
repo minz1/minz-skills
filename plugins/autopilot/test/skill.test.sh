@@ -27,11 +27,11 @@ test_now_marker() {
 test_usage_line() { in_skill 'usage: /autopilot '; }
 
 test_new_rules() {
-  in_skill '`[c]` committed locally' 'refs/heads/ship/<id>' 'ahead-cap:' 'ack-timeout:' 'serves: <repo>' 'ship: <group>' 'findings:' \
+  in_skill '[c]' 'committed locally' 'refs/heads/ship/<id>' 'ahead-cap:' 'ack-timeout:' 'serves: <repo>' 'ship: <group>' 'findings:' \
     "git diff --stat A B -- . ':!.autopilot' ':!.gitignore'" 'reject <id>' 'nack <id>' 'watch <id>' 'done <repo>' '(replaces <old-id>)'
 }
 test_owner_rules() { in_skill '## Owner' 'deviated: <why>' 'owner-notes-used:' '[once]' 'short paraphrase'; }
-test_planning_rules() { in_skill 'pgrep -af autopilot-runner' '.claude/settings.local.json' 'Resolve every SHA' 'should be tracked' '~/.config/autopilot/weekly-ceiling'; }
+test_planning_rules() { in_skill 'pgrep -af autopilot-runner' '.claude/settings.local.json' 'Resolve every SHA' 'should be tracked' '.config/autopilot/weekly-ceiling'; }
 test_interim_legacy() {
   in_skill '## Interim: legacy plans' 'legacy: true' 'Remove this section once'
   ! grep -qE '^(protocol|legacy):' "$PLAN" || die "template carries a version header"
