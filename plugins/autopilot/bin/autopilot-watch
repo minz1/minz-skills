@@ -90,7 +90,9 @@ state_of() { # <repo> [run] -> st label stream info[]
   after=$(gawk '/^[^ ]+ session=[0-9]+ (start|end) /{a=""; next} {a = a $0 "\n"} END {printf "%s", a}' "$log" 2>/dev/null)
   n=$(sed -nE 's/^[^ ]+ session=([0-9]+) .*/\1/p' <<<"$lastl")
   stream=$rel/sessions/$n.jsonl
-  local ndone blk open
+  local ndone blk open nc np own
+  own=$(gawk '/^## Owner[[:space:]]*$/{h=1; next} /^## /{h=0} h && /^- /' "$plan" 2>/dev/null | wc -l)
+  nc=$(grep -c '^- \[c\]' "$plan" 2>/dev/null) np=$(grep -c '^- \[p\]' "$plan" 2>/dev/null)
   ndone=$(grep -c '^- \[x\]' "$plan" 2>/dev/null) blk=$(grep -cE '^- \[!!?\]' "$plan" 2>/dev/null) open=$(grep -c '^- \[ \]' "$plan" 2>/dev/null)
   if [[ $lastl == *" start "* ]] && ((live)); then
     age=$((now - $(stat -c %Y "$stream" 2>/dev/null || echo "$now")))
@@ -115,6 +117,7 @@ state_of() { # <repo> [run] -> st label stream info[]
     fi
   fi
   ((blk == 0)) || { st=needs; label+=" · $blk blocked"; }
+  ((own == 0)) || { st=needs; label+=" · owner $own"; }
   label="$(basename "$repo") · $label"
 
   local item hist ctx br up notes applied weekly five ceil work cap nowv
@@ -127,6 +130,9 @@ state_of() { # <repo> [run] -> st label stream info[]
   weekly=$(grep -oE 'weekly=[0-9.]+' <<<"$endl" | cut -d= -f2)
   five=$(grep -oE 'five_hour=[0-9.]+' <<<"$endl" | cut -d= -f2)
   ceil=$(hv weekly-ceiling "$plan")
+  local gc
+  gc=$(head -1 "$HOME/.config/autopilot/weekly-ceiling" 2>/dev/null)
+  if [[ $gc =~ ^[0-9]*\.?[0-9]+$ ]] && gawk -v a="$gc" -v b="${ceil:-1}" 'BEGIN { exit !(a + 0 < b + 0) }'; then ceil=$gc; fi
   cap=$(hv session-cap "$plan")
   ctx=$(grep -oE 'peak_ctx=[0-9]+' <<<"$endl" | cut -d= -f2)
   work=$(grep -E '^[^ ]+ session=[0-9]+ end ' "$log" 2>/dev/null | grep -vc ' exit=WAIT ')
@@ -140,9 +146,9 @@ state_of() { # <repo> [run] -> st label stream info[]
   notes=$(num "$(grep -c '^- ' "$rel/owner.md" 2>/dev/null)")
   info=(
     "item ${item:-none}"
-    "${ndone}✓ ${blk}✗ ${open}○  ·  s${n:-0}  ·  work $work/${cap:-?}  ·  wk $(pct "$weekly")/$(pct "$ceil")  ·  5h $(pct "$five")"
+    "${ndone}✓ ${blk}✗ ${open}○$( ((nc + np > 0)) && echo " ${nc}c ${np}p")  ·  s${n:-0}  ·  work $work/${cap:-?}  ·  wk $(pct "$weekly")/$(pct "$ceil")  ·  5h $(pct "$five")"
     "last ${hist:-none} ·  ctx $((${ctx:-0} / 1000))k"
-    "${br:-detached}  ·  $up  ·  notes $applied/$notes$( ((notes > applied)) && echo " (${YEL}$((notes - applied)) pending${R})")"
+    "${br:-detached}  ·  $up  ·  notes $applied/$notes$( ((notes > applied)) && echo " (${YEL}$((notes - applied)) pending${R})")$( ((own > 0)) && echo "  ·  ${RED}owner $own${R}")"
   )
 }
 

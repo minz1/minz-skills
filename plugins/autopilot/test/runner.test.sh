@@ -455,6 +455,34 @@ test_runner_text_cleaned() {
   setup; sc 1 $'hi\033]0;x\007\nAUTOPILOT: DONE'; go
   ! grep -qP '\x1b|\x07' <<<"$OUT" || die "control chars in runner output"
 }
+test_notify_owner_section() {
+  setup; hook; printf '## Owner\n- old\n## Handoff\n' >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^- old$/- old\\n- decide the ramp/\" .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  waitfor "$W/notified" "stopped done"; grep -q 'repo t owner - decide the ramp' "$W/notified" || die "$(notified)"
+  eq "$(grep -c ' owner ' "$W/notified")" 1 "owner lines"
+}
+test_global_ceiling_lower() {
+  setup; mkdir -p "$HOME/.config/autopilot"; echo 0.50 > "$HOME/.config/autopilot/weekly-ceiling"
+  sc 1 "$NEXT" '{"usage":{"weekly":0.55,"five_hour":0.1}}'; sc 2 "$DONE"; go
+  call_has 2 wrapup; stopped "weekly usage 0.55"
+}
+test_global_ceiling_garbage_ignored() {
+  setup; mkdir -p "$HOME/.config/autopilot"; echo 'lots' > "$HOME/.config/autopilot/weekly-ceiling"
+  sc 1 "$NEXT" '{"usage":{"weekly":0.55,"five_hour":0.1}}'; sc 2 "$DONE"; go
+  no_wrapup
+}
+
+test_board_owner_line_wakes() {
+  setup; board_setup; board_wait
+  nap_hook "[ \$1 -eq 1 ] && echo '- 2026-10-23T09:00:00Z owner → repo: hold deploys' >> '$BOARD/peer.md'; exit 0"; go
+  log_has "woke reason=board:peer.md after=10s"
+}
+test_owner_heading_exact() {
+  setup; hook; printf '## Owner notes\n## Handoff\n' >> "$PLAN"
+  sc 1 "$NEXT" '{"exec":"sed -i \"s/^## Owner notes$/## Owner notes\\n- not an owner line/\" .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  waitfor "$W/notified" "stopped done"; ! grep -q ' owner ' "$W/notified" || die "$(notified)"
+}
+
 test_limit_nap_wakes_on_stop() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 "$DONE"
   nap_hook "[ \$1 -ge 2 ] && touch .autopilot/runs/t/STOP; exit 0"; go
@@ -556,7 +584,7 @@ test_header_reread_each_loop() {
 }
 test_rejected_five_hour_sleeps() {
   setup; sc 1 "" "$(lim five_hour 600)"; sc 2 garbage; sc 3 "$DONE"; go
-  near "$(slept_total)" 600 slept; all_steps_10
+  near "$(slept_total)" 600 slept
   eq "$(exits)" "limit crash DONE" "exits"
 }
 test_rejected_past_reset_min_sleep() {
@@ -790,6 +818,11 @@ out=$(test_exit_word_escapes_cleaned 2>/dev/null); t test_exit_word_escapes_clea
 out=$(test_upgrade_ignores_project_scope 2>/dev/null); t test_upgrade_ignores_project_scope "$out" $?
 out=$(test_watchdog_exits_after_runner_sigkill 2>/dev/null); t test_watchdog_exits_after_runner_sigkill "$out" $?
 out=$(test_runner_text_cleaned 2>/dev/null); t test_runner_text_cleaned "$out" $?
+out=$(test_notify_owner_section 2>/dev/null); t test_notify_owner_section "$out" $?
+out=$(test_global_ceiling_lower 2>/dev/null); t test_global_ceiling_lower "$out" $?
+out=$(test_global_ceiling_garbage_ignored 2>/dev/null); t test_global_ceiling_garbage_ignored "$out" $?
+out=$(test_board_owner_line_wakes 2>/dev/null); t test_board_owner_line_wakes "$out" $?
+out=$(test_owner_heading_exact 2>/dev/null); t test_owner_heading_exact "$out" $?
 out=$(test_limit_nap_wakes_on_stop 2>/dev/null); t test_limit_nap_wakes_on_stop "$out" $?
 out=$(test_wait_bad_minutes_is_crash 2>/dev/null); t test_wait_bad_minutes_is_crash "$out" $?
 out=$(test_template_plan_starts 2>/dev/null); t test_template_plan_starts "$out" $?

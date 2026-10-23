@@ -10,11 +10,15 @@ cmd=$1
 shift
 run_name=
 now=
+once=
+to=
 words=()
 while [ $# -gt 0 ]; do
   case $1 in
     --run) [ $# -ge 2 ] || usage; run_name=$2; shift 2 ;;
     --now) if [ "$cmd" = stop ]; then now=1; else words+=("$1"); fi; shift ;;
+    --once) if [ "$cmd" = note ]; then once=1; else words+=("$1"); fi; shift ;;
+    --to) if [ "$cmd" = note ] && [ $# -ge 2 ]; then to=$2; shift 2; else words+=("$1"); shift; fi ;;
     *) words+=("$1"); shift ;;
   esac
 done
@@ -23,6 +27,12 @@ case $cmd in
   *) usage ;;
 esac
 bin=$(dirname "$(readlink -f "$0")")
+board_of() { # <plan.md>: the board dir, or nothing
+  local b
+  b=$(sed -n 's/^board:[[:space:]]*//;T;s/[[:space:]]*$//;p' "$1" 2>/dev/null | head -1)
+  case $b in none | '') return ;; \~/*) b=$HOME/${b#\~/} ;; esac
+  [ -d "$b" ] && echo "${b%/}"
+}
 
 if [ "$cmd" = dash ]; then
   T() { env -u TMUX tmux -f /dev/null -L autopilot-dash "$@"; }
@@ -40,10 +50,7 @@ if [ "$cmd" = dash ]; then
       T set -g history-limit 0 \; new-session -d -s dash -x 240 -y 60 -e "AP_WATCH=$bin/autopilot-watch" -e "AP_REPO=$r" "$pane"
     fi
     if [ -z "$board" ]; then
-      p=$(find "$r/.autopilot/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)/plan.md
-      b=$(sed -n 's/^board:[[:space:]]*//p' "$p" 2>/dev/null | head -1)
-      case $b in none | '') b= ;; \~/*) b=$HOME/${b#\~/} ;; esac
-      [ -z "$b" ] || [ ! -d "$b" ] || board=${b%/}
+      board=$(board_of "$(find "$r/.autopilot/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)/plan.md")
     fi
   done
   T select-layout -t =dash: tiled
@@ -79,6 +86,8 @@ rel=.autopilot/runs/$run_name
 [ -d "$rel" ] || fail "no run $run_name in $repo; run /autopilot plan first"
 
 live() { tmux has-session -t "$target" 2>/dev/null; }
+board_dir() { board_of "$rel/plan.md"; }
+owner_lines() { awk '/^## Owner[[:space:]]*$/{h=1; next} /^## /{h=0} h && /^- /' "$rel/plan.md"; }
 
 case $cmd in
   watch)
@@ -86,7 +95,15 @@ case $cmd in
     ;;
   note)
     [ ${#words[@]} -gt 0 ] || usage
-    printf -- '- %s %s\n' "$(date -u +%FT%TZ)" "${words[*]}" >> "$rel/owner.md"
+    ts=$(date -u +%FT%TZ)
+    board=
+    [ -z "$to" ] || board=$(board_dir)
+    if [ -n "$to" ] && [ -z "$board" ]; then fail "no board for this run"; fi
+    printf -- '- %s %s%s%s\n' "$ts" "${once:+[once] }" "${to:+[to $to] }" "${words[*]}" >> "$rel/owner.md"
+    [ -z "$to" ] || printf -- '- %s owner → %s: %s\n' "$ts" "$to" "${words[*]}" >> "$board/$(basename "$repo").md"
+    grep -oE 'item [0-9]+' <<<"${words[*]}" | while read -r _ n; do
+      ! grep -qE "^- \[x\] *$n\." "$rel/plan.md" || echo "warning: item $n is already done" >&2
+    done
     echo "note $(grep -c '^- ' "$rel/owner.md") added; a waiting run wakes within ~10 s; a running session sees it before its next push or at its next session"
     ;;
   start)
@@ -170,13 +187,20 @@ case $cmd in
     echo "run $run_name: $state"
     item=${item:-none}
     echo "now: ${item:0:160}"
-    echo "$(grep -c '^- \[x\]' "$plan") done, $(grep -cE '^- \[!!?\]' "$plan") blocked, $(grep -c '^- \[ \]' "$plan") open · sessions $work/$(hv session-cap) · notes $(hv owner-notes-applied | grep . || echo 0)/${notes:-0}"
+    nc=$(grep -c '^- \[c\]' "$plan") np=$(grep -c '^- \[p\]' "$plan")
+    cp=
+    [ "$((nc + np))" = 0 ] || cp="$nc committed, $np pushed, "
+    echo "$(grep -c '^- \[x\]' "$plan") done, $cp$(grep -cE '^- \[!!?\]' "$plan") blocked, $(grep -c '^- \[ \]' "$plan") open · sessions $work/$(hv session-cap) · notes $(hv owner-notes-applied | grep . || echo 0)/${notes:-0}"
+    own=$(owner_lines)
+    if [ -n "$own" ]; then
+      echo "owner: $(wc -l <<<"$own")"
+      head -3 <<<"$own" | sed 's/^/  /'
+    fi
     echo "handoff:"
     awk '/^## Handoff/{h=1; next} /^## /{h=0} h && NF' "$plan" | head -15
     echo "last session end: $(grep -E '^[^ ]+ session=[0-9]+ end exit=' "$log" 2>/dev/null | tail -1 | cut -d' ' -f2-)"
-    board=$(hv board)
-    case $board in none | '') board= ;; \~/*) board=$HOME/${board#\~/} ;; esac
-    if [ -n "$board" ] && [ -d "$board" ]; then
+    board=$(board_dir)
+    if [ -n "$board" ]; then
       echo "board:"
       for f in "${board%/}"/*.md; do
         [ -f "$f" ] || continue

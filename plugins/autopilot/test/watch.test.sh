@@ -111,6 +111,19 @@ test_control_chars_stripped() {
 }
 test_spaced_repo() { setup "my repo"; live; session_start 1 1; frame; has "$(first)" "my repo · WORKING s1" header; }
 
+test_new_states_and_owner() {
+  setup; live; session_start 4 10; printf '%s\n' '- [x] 1. a' '- [c] 2. b' '- [p] 3. c' '- [ ] 4. d' '## Owner' '- decide x' '## Handoff' >> "$PLAN"
+  frame; has "$OUT" "1✓ 0✗ 1○ 1c 1p" counts; has "$OUT" "owner 1" owner
+  OUT=$(bash "$WATCH" --once --width 100 --height 10 "$repo"); has "$(head -1 <<<"$OUT")" $'\033[41;30;1m' "owner makes it red"
+}
+test_board2_open_requests() {
+  setup; local b=$W/board; mkdir -p "$b"
+  printf -- '- 2026-10-23T01:00Z a-1 → b: x\n- 2026-10-23T01:10Z a-2 → b: y\n- 2026-10-23T01:20Z a-3 (replaces a-2) → b: z\n- 2026-10-23T01:30Z a-4 → b, c: w\n- done a\n' > "$b/a.md"
+  printf -- '- 2026-10-23T02:00Z reject a-1: no\n- 2026-10-23T02:10Z nack a-4: rolled back\n' > "$b/b.md"
+  OUT=$(bash "$WATCH" board --once --width 120 --height 4 "$b" | plain)
+  has "$(head -1 <<<"$OUT")" "open: a-3 → b" open; lacks "$(head -1 <<<"$OUT")" "a-1 →" reject; lacks "$(head -1 <<<"$OUT")" "a-2 →" replaced; lacks "$(head -1 <<<"$OUT")" "a-4" nack
+}
+test_dash_row4_owner_count() { setup; printf '%s\n' '## Owner' '- a' '- b' >> "$PLAN"; frame; has "$OUT" "owner 2" row4; }
 test_tiny_widths() {
   setup; live; session_start 4 1; mkstream
   local w; for w in 3 4; do
@@ -157,6 +170,9 @@ out=$(test_board_open_requests 2>/dev/null); t test_board_open_requests "$out" $
 out=$(test_hostile_plan_values 2>/dev/null); t test_hostile_plan_values "$out" $?
 out=$(test_control_chars_stripped 2>/dev/null); t test_control_chars_stripped "$out" $?
 out=$(test_spaced_repo 2>/dev/null); t test_spaced_repo "$out" $?
+out=$(test_new_states_and_owner 2>/dev/null); t test_new_states_and_owner "$out" $?
+out=$(test_board2_open_requests 2>/dev/null); t test_board2_open_requests "$out" $?
+out=$(test_dash_row4_owner_count 2>/dev/null); t test_dash_row4_owner_count "$out" $?
 out=$(test_tiny_widths 2>/dev/null); t test_tiny_widths "$out" $?
 out=$(test_rollback_line_is_not_an_answer 2>/dev/null); t test_rollback_line_is_not_an_answer "$out" $?
 out=$(test_interactive_keys 2>/dev/null); t test_interactive_keys "$out" $?

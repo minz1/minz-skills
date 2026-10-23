@@ -17,3 +17,12 @@
 
 ## Where to look for more work
 <open scope only: files, surveys and findings that feed new items>
+
+## Long commands
+<deploys and suites that can outlast a tool timeout: run them detached and exit `WAIT <cap> pid=<pid>`, or give an explicit timeout>
+
+## Shared tool locks
+<tools shared with other runs (e.g. golangci-lint's lock): retry on their lock message instead of failing the item>
+
+## Peers
+<paired runs: who serves whom, pacing (how many peer deploys per session), and which peer is on the critical path>

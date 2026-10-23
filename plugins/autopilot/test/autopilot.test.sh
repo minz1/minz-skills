@@ -371,12 +371,39 @@ test_stray_file_and_empty_note() {
   has "$(cat "$R2/owner.md")" "--now x" owner.md
 }
 
+test_status_new_states() {
+  setup; printf '%s\n' '- [x] 1. a' '- [x] 2. b' '- [c] 3. c' '- [p] 4. d' '- [ ] 5. e' >> "$R2/plan.md"
+  ap status; has "$OUT" "2 done, 1 committed, 1 pushed, 0 blocked, 1 open" status
+}
+test_status_owner_section() {
+  setup; printf '%s\n' '## Owner' '- o1' '- o2' '- o3' '- o4' '## Handoff' 'h' >> "$R2/plan.md"
+  ap status; has "$OUT" "owner: 4" status; has "$OUT" "  - o3" status; lacks "$OUT" "  - o4" status
+}
+test_note_once() { setup; ap note --once "skip it"; grep -qE '^- [0-9T:-]+Z \[once\] skip it$' "$R2/owner.md" || die "$(cat "$R2/owner.md")"; }
+test_note_to_peer() {
+  setup; mkdir -p "$HOME/.autopilot/b"; echo 'board: ~/.autopilot/b/' >> "$R2/plan.md"
+  ap note --to nixfiles "hold deploys"
+  eq "$RC" 0 rc; grep -qE '^- [0-9T:-]+Z owner → nixfiles: hold deploys$' "$HOME/.autopilot/b/repo.md" || die "board: $(cat "$HOME/.autopilot/b/repo.md")"
+  has "$(cat "$R2/owner.md")" "hold deploys" owner.md
+}
+test_note_to_without_board() { setup; ap note --to x "hi"; [ "$RC" != 0 ] || die "rc 0"; has "$ERR" "no board for this run" stderr; }
+test_note_warns_done_item() {
+  setup; echo '- [x] 3. thing' >> "$R2/plan.md"; ap note "item 3 should change"
+  has "$ERR" "warning: item 3 is already done" stderr; has "$(cat "$R2/owner.md")" "item 3 should change" owner.md
+}
 test_dash_spaced_repo_from_start() {
   setup "my repo"; start_run
   TMUX=x ap dash; eq "$RC" 0 rc
   trap 'tmux kill-server 2>/dev/null; tmux -L autopilot-dash kill-server 2>/dev/null' EXIT
   sleep 2; tmux -L autopilot-dash capture-pane -p -t "=dash:0.0" | grep -qF "my repo · " || die "pane: $(tmux -L autopilot-dash capture-pane -p -t "=dash:0.0")"
   tmux -L autopilot-dash kill-server
+}
+
+test_board_trailing_space() {
+  setup; mkdir -p "$HOME/.autopilot/b"; echo 'board: ~/.autopilot/b/  ' >> "$R2/plan.md"; printf -- '- p-1 → repo: hi\n' > "$HOME/.autopilot/b/p.md"
+  ap status; has "$OUT" "board:" status
+  ap note --to p "x"; eq "$RC" 0 "note rc"; grep -q 'owner → p: x' "$HOME/.autopilot/b/repo.md" || die "no owner line"
+  grep -qE '^- [0-9T:-]+Z \[to p\] x$' "$R2/owner.md" || die "owner.md: $(cat "$R2/owner.md")"
 }
 
 fail=0
@@ -423,6 +450,13 @@ out=$(test_status_ignores_session_in_detail 2>/dev/null); t test_status_ignores_
 out=$(test_start_runner_refuses 2>/dev/null); t test_start_runner_refuses "$out" $?
 out=$(test_start_env_scrubbed 2>/dev/null); t test_start_env_scrubbed "$out" $?
 out=$(test_stray_file_and_empty_note 2>/dev/null); t test_stray_file_and_empty_note "$out" $?
+out=$(test_status_new_states 2>/dev/null); t test_status_new_states "$out" $?
+out=$(test_status_owner_section 2>/dev/null); t test_status_owner_section "$out" $?
+out=$(test_note_once 2>/dev/null); t test_note_once "$out" $?
+out=$(test_note_to_peer 2>/dev/null); t test_note_to_peer "$out" $?
+out=$(test_note_to_without_board 2>/dev/null); t test_note_to_without_board "$out" $?
+out=$(test_note_warns_done_item 2>/dev/null); t test_note_warns_done_item "$out" $?
 out=$(test_dash_spaced_repo_from_start 2>/dev/null); t test_dash_spaced_repo_from_start "$out" $?
+out=$(test_board_trailing_space 2>/dev/null); t test_board_trailing_space "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
