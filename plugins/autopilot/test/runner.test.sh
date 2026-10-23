@@ -420,10 +420,31 @@ test_stopped_task_before_last_message_is_crash() {
 }
 test_board_ping_pong_paused() {
   setup; hook; board_setup
-  local i; for i in $(seq 11); do sc "$i" "AUTOPILOT: WAIT 1"; done; sc 12 "$DONE"
+  local i; for i in $(seq 13); do sc "$i" "AUTOPILOT: WAIT 1"; done; sc 14 "$NEXT"; sc 15 "AUTOPILOT: WAIT 1"; sc 16 "$DONE"
   nap_hook "echo '- p-1 → repo: x' >> '$BOARD/peer.md'; exit 0"; go
-  eq "$(grep -c 'woke reason=board' "$LOG")" 10 "board wakes"; eq "$(grep -c 'woke reason=timeout' "$LOG")" 1 "timeouts"
-  waitfor "$W/notified" "stalled 10 board-woken waits in a row"
+  eq "$(grep -c 'woke reason=board' "$LOG")" 11 "board wakes"; eq "$(grep -c 'woke reason=timeout' "$LOG")" 3 "timeouts"
+  waitfor "$W/notified" "stopped done"
+  eq "$(grep -c 'stalled 10 board-woken waits in a row' "$W/notified")" 1 "stalled notices"
+}
+test_exit_word_escapes_cleaned() {
+  setup; sc 1 $'AUTOPILOT: STOP a\033]0;pwn\007b'; go
+  ! grep -qP '\x1b|\x07' <<<"$OUT" || die "control chars in stdout"; ! grep -qP '\x1b|\x07' "$LOG" || die "control chars in log"
+  stopped "owner needed: a]0;pwnb"
+}
+test_upgrade_ignores_project_scope() {
+  setup; fake_cache v1 v2; mkdir -p "$HOME/.claude/plugins"
+  printf '{"plugins":{"autopilot@m":[{"scope":"project","installPath":"%s"},{"scope":"user","installPath":"%s"}]}}\n' "$CACHE/v2" "$CACHE/v1" > "$HOME/.claude/plugins/installed_plugins.json"
+  sc 1 "$NEXT"; sc 2 "$DONE"; go_from v1
+  log_lacks "upgrade"
+}
+test_watchdog_exits_after_runner_sigkill() {
+  setup; export AUTOPILOT_STALL_EVERY=1; sc 1 "$NEXT" '{"sleep":30}'
+  bash "$RUNNER" "$repo" .autopilot/runs/t >"$W/out" 2>&1 &
+  local pid=$!
+  waitfor "$LOG" "session=1 start"; waitfor "$FAKE_SCENARIO/sleep.pid" ""
+  kill -KILL "$pid"; wait "$pid" 2>/dev/null; sleep 3
+  local left; left=$(pgrep -f "$W/repo"); kill "$(cat "$FAKE_SCENARIO/fake.pid")" "$(cat "$FAKE_SCENARIO/sleep.pid")" 2>/dev/null
+  [ -z "$left" ] || die "watchdog survived: $left"
 }
 test_runner_text_cleaned() {
   setup; sc 1 $'hi\033]0;x\007\nAUTOPILOT: DONE'; go
@@ -759,6 +780,9 @@ out=$(test_nowait_logged 2>/dev/null); t test_nowait_logged "$out" $?
 out=$(test_two_nowaits_stop 2>/dev/null); t test_two_nowaits_stop "$out" $?
 out=$(test_stopped_task_before_last_message_is_crash 2>/dev/null); t test_stopped_task_before_last_message_is_crash "$out" $?
 out=$(test_board_ping_pong_paused 2>/dev/null); t test_board_ping_pong_paused "$out" $?
+out=$(test_exit_word_escapes_cleaned 2>/dev/null); t test_exit_word_escapes_cleaned "$out" $?
+out=$(test_upgrade_ignores_project_scope 2>/dev/null); t test_upgrade_ignores_project_scope "$out" $?
+out=$(test_watchdog_exits_after_runner_sigkill 2>/dev/null); t test_watchdog_exits_after_runner_sigkill "$out" $?
 out=$(test_runner_text_cleaned 2>/dev/null); t test_runner_text_cleaned "$out" $?
 out=$(test_limit_nap_wakes_on_stop 2>/dev/null); t test_limit_nap_wakes_on_stop "$out" $?
 out=$(test_wait_bad_minutes_is_crash 2>/dev/null); t test_wait_bad_minutes_is_crash "$out" $?

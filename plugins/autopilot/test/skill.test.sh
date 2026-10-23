@@ -13,7 +13,7 @@ test_wait_pid_documented() {
 }
 test_board_aware_exits() { in_skill 're-read every board file' 'could act on it now' 'WAIT <cap>' 'new request or an answer'; }
 test_notes_before_shipping() { in_skill 'right before any push, tag, deploy or deploy post'; }
-test_stop_hygiene() { in_skill 'git status --porcelain' 'still untracked now' 'exit=nowait' 'Wait for background agents'; }
+test_stop_hygiene() { in_skill 'git status --porcelain' 'still untracked now' 'exit=nowait' 'must finish before you exit' 'Only detached jobs'; }
 test_solo_board_none() {
   in_skill 'board: none'
   grep -q 'none' "$PLAN" || die "template lacks board: none guidance"
