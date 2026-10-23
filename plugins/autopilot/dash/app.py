@@ -736,8 +736,10 @@ class Dash(App[None]):
         ]
         await lv.extend(ListItem(Label(r)) for r in rows)
         self.query_one(TabbedContent).get_tab("owner").label = f"Owner ({len(items)})"
-        if items:
-            lv.index = key.index(picked) if picked in key else min(old or 0, len(items) - 1)
+        if picked in key:
+            lv.index = key.index(picked)
+        elif picked is None and items:
+            lv.index = min(old or 0, len(items) - 1)
         self.show_owner_item()
 
     def show_owner_item(self) -> None:
@@ -745,7 +747,9 @@ class Dash(App[None]):
         lv = self.query_one("#ownerlist", ListView)
         md = self.query_one("#owner-text", Markdown)
         if lv.index is None or lv.index >= len(self.owner_list):
-            md.update("_nothing is waiting on you_" if not self.owner_list else "")
+            md.update(
+                "_nothing is waiting on you_" if not self.owner_list else "_that item was resolved; pick another_"
+            )
             return
         s, ln = self.owner_list[lv.index]
         repo, run = model.clean(s.ref.repo.name), model.clean(s.ref.run_dir.name)

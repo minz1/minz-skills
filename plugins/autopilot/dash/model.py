@@ -103,8 +103,8 @@ def resolve_runs(registry: list[Path], sessions: dict[str, Path], rel: dict[str,
         name = live.get(repo)
         r = rel.get(name) if name else None
         try:
-            run_dir = repo / r if r else newest_run(repo) if repo.exists() else None
             missing = not repo.exists()
+            run_dir = None if missing else repo / r if r else newest_run(repo)
         except OSError:
             run_dir, missing = None, True
         if missing:

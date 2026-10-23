@@ -839,3 +839,24 @@ async def test_log_dir_unwritable_contained(isolated: Path, make_run: MakeRun, m
         assert g.state.label.startswith("WORKING s1")
         assert b.state is not None
         assert b.state.st == "needs"
+
+
+async def test_owner_answer_dropped_when_item_resolves(
+    isolated: Path, make_run: MakeRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the selected item is resolved while the owner types, Enter sends nothing."""
+    a = make_run("a", plan=owner_plan("A1", "A2"), log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(a))
+    d = dash(isolated)
+    rec = Recorder()
+    monkeypatch.setattr(d, "run_argv", rec)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("o", "enter", *"yes")
+        (a / "plan.md").write_text(owner_plan("A2"))
+        d.kick()
+        await settle(pilot)
+        assert "resolved" in d.query_one("#owner-text", Markdown).source
+        await pilot.press("enter")
+        await pilot.pause()
+    assert rec.calls == []
