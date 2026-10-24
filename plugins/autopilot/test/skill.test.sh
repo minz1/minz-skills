@@ -59,6 +59,19 @@ test_dash_launcher_register() {
     ! grep -qF -- "$k" "$SKILL" || die "SKILL.md still has '$k'"
   done
 }
+test_phase_skills() {
+  in_skill '## Skills' "\`work:\`" "\`retry:\`" "\`done:\`" "\`review:\`" 'skills listed in this session' 'superpowers:executing-plans' 'log.md` as its ledger'
+  local block k
+  block=$(awk '/^## /{on = ($0 == "## Skills")} on' "$DIR/../skills/autopilot/templates/rules.md")
+  for k in work retry done review; do printf '%s\n' "$block" | grep -q "^$k: " || die "rules template ## Skills lacks $k:"; done
+}
+
+test_skill_refs_exist() {
+  local root=$DIR/../../superpowers/skills ref
+  for ref in $(grep -rhoE 'superpowers:[a-z-]+' "$DIR/../skills" "$root" | sort -u); do
+    [ -f "$root/${ref#superpowers:}/SKILL.md" ] || die "missing skill $ref"
+  done
+}
 
 fail=0
 t() {
@@ -82,5 +95,7 @@ out=$(test_review_rules 2>/dev/null); t test_review_rules "$out" $?
 out=$(test_wait_ack_documented 2>/dev/null); t test_wait_ack_documented "$out" $?
 out=$(test_owner_entries_resolved 2>/dev/null); t test_owner_entries_resolved "$out" $?
 out=$(test_dash_launcher_register 2>/dev/null); t test_dash_launcher_register "$out" $?
+out=$(test_phase_skills 2>/dev/null); t test_phase_skills "$out" $?
+out=$(test_skill_refs_exist 2>/dev/null); t test_skill_refs_exist "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

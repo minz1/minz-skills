@@ -9,6 +9,13 @@
 ## Reviewer stand-in
 <how the Final item gets reviewed, e.g. run the reviewer agent and fix its findings>
 
+## Skills
+<skills sessions use at each phase; `/autopilot plan` proposes them from what is installed>
+work: <item work, e.g. superpowers:test-driven-development>
+retry: <a second attempt or a revisit, e.g. superpowers:systematic-debugging>
+done: <before marking an item [x], e.g. superpowers:verification-before-completion>
+review: <handling reviewer findings, e.g. superpowers:receiving-code-review>
+
 ## Fleet
 <how fleet agents are launched, where their logs are, how to tell running from exited>
 

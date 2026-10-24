@@ -33,13 +33,13 @@ Runs a queue of work unattended, one fresh Claude session per item, so context s
 
 To watch everything at once, run `autopilot dash` in a terminal. It shows every run you've started (or added with `autopilot register` in its repo), live: what each session is doing right now, a feed of what happened since you last looked, the owner items waiting on you, and how fast weekly usage is going. You can answer an owner item, send a note, or start and stop a run from there without asking Claude. The dash needs [uv](https://docs.astral.sh/uv/); the first start downloads Textual, so it takes a few seconds.
 
-Each repo needs `.autopilot/rules.md`: the checks, what may be pushed or deployed mid-run, and what must stop the run. `/autopilot plan` drafts it with you the first time. Runs live in `.autopilot/runs/`, which `plan` adds to `.gitignore`.
+Each repo needs `.autopilot/rules.md`: the checks, what may be pushed or deployed mid-run, and what must stop the run. `/autopilot plan` drafts it with you the first time, including a `## Skills` section that picks, from the skills you have installed, which ones sessions use for item work, retries, the check before an item counts as done, and review findings. Runs live in `.autopilot/runs/`, which `plan` adds to `.gitignore`.
 
 A waiting run wakes as soon as the job it's waiting on exits, a peer posts to it on the board, or you add a note, so a long WAIT is only a ceiling. If you want to hear about it when a run stops, an item gets blocked or a session goes quiet for an hour, drop an executable at `~/.config/autopilot/notify`. It gets called as `notify <repo> <run> <event> <detail>`. On WSL, `plugins/autopilot/examples/notify-wsl-toast` turns that into a Windows toast.
 
 ## superpowers
 
-My fork of five skills from [obra/superpowers](https://github.com/obra/superpowers): `brainstorming`, `writing-plans`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`. Claude picks them up on its own; you can also call them by name, e.g. `/superpowers:brainstorming`.
+My fork of seven skills from [obra/superpowers](https://github.com/obra/superpowers): `brainstorming`, `writing-plans`, `executing-plans`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `receiving-code-review`. `executing-plans` and `receiving-code-review` are trimmed: a progress ledger, logged rulings and graded review findings, without upstream's worktree and branch-finishing steps. Claude picks them up on its own; you can also call them by name, e.g. `/superpowers:brainstorming`.
 
 ## License
 

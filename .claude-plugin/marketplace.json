@@ -3,6 +3,6 @@
   "owner": { "name": "minz1" },
   "plugins": [
     { "name": "autopilot", "source": "./plugins/autopilot", "description": "Autonomous runs that recycle a fresh orchestrator session per queue item." },
-    { "name": "superpowers", "source": "./plugins/superpowers", "description": "Fork of five obra/superpowers skills." }
+    { "name": "superpowers", "source": "./plugins/superpowers", "description": "Fork of seven obra/superpowers skills." }
   ]
 }

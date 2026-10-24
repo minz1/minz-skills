@@ -56,7 +56,7 @@ independently testable deliverable.
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For agentic workers:** Implement task-by-task, in order. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use superpowers:executing-plans to implement this plan task-by-task, in order. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -191,14 +191,12 @@ them to review the plan and choose an execution method before implementation.
 - **Subagent-driven** - A fresh subagent implements each task and a fresh reviewer checks it before the next one starts, then a whole-branch review at the end. Most thorough; costs a fresh context per task and per review.
 - **Native** - I implement every task myself in this session, the way this harness runs work, then one fresh reviewer on the most capable model checks the whole branch. Cheapest and fastest; no independent review until the end. Runs well with a mid-tier session model, since the plan carries the design.
 
-**For this plan I recommend <one of the two>, because <one sentence from the plan: how much the tasks depend on each other's interfaces, how many there are, what a shipped mistake would cost>. Does the plan capture what you want, and which approach should we use?"**
+**For this plan I recommend <one of the two>, because <one sentence from the plan: how much the tasks depend on each other's interfaces, how many there are, what a shipped mistake would cost>. Does the plan capture what you want, which approach should we use, and should each task be committed as its commit steps say?"**
 
 **When an execution method has already been supplied:**
 
-**"Plan complete and saved to `docs/plans/<filename>.md`. Please review the plan. Does it capture what you want?"**
+**"Plan complete and saved to `docs/plans/<filename>.md`. Please review the plan. Does it capture what you want, and should each task be committed as its commit steps say?"**
 
-**If Subagent-driven chosen:** for each task, dispatch one fresh `general-purpose` subagent with the task text, the plan's header sections and the spec path. When it reports back, dispatch the `reviewer` agent on that task's diff. Fix findings before the next task. Finish with one `reviewer` pass over the whole branch.
+Then use superpowers:executing-plans in the chosen mode. A yes to the commit question is the go-ahead for the plan's commit steps; otherwise tasks stay uncommitted.
 
-**If Native chosen:** implement each task yourself, ticking its checkboxes and running each verification step, then one `reviewer` pass over the whole branch.
-
-Either way, apply verification-before-completion before calling the plan done.
+Under autopilot no one is present to answer: use Native unless the item or `.autopilot/rules.md` names Subagent-driven, commit on the run branch as the autopilot protocol says, and go straight to superpowers:executing-plans.
