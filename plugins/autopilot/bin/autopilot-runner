@@ -149,6 +149,8 @@ read_header() {
   bad=
   [[ $ceiling =~ ^[0-9]*\.?[0-9]+$ ]] || bad='weekly-ceiling'
   [[ $cap =~ ^[0-9]+$ ]] || bad='session-cap'
+  next_model=$(header_value next-model)
+  [[ ${next_model:-opus} =~ ^(sonnet|opus|haiku)$ ]] || bad='next-model'
   [ -z "$bad" ] || { bad="$run/plan.md has no valid $bad"; return 1; }
   local gc
   gc=$(head -1 "$HOME/.config/autopilot/weekly-ceiling" 2>/dev/null)
@@ -339,11 +341,17 @@ while :; do
   n=$((${n:-0} + 1))
   sha=$(checkpoint "$n")
   [ -n "$sha" ] || stop "checkpoint failed"
-  log "session=$n start mode=$mode checkpoint=$sha"
+  if [ -n "${AUTOPILOT_MODEL:-}" ]; then
+    model=$AUTOPILOT_MODEL pw= label=override:$AUTOPILOT_MODEL
+  else
+    model=${next_model:-opus}
+    [ "$mode" != wrapup ] || model=opus
+    pw=$model label=$model
+  fi
+  log "session=$n start mode=$mode model=$label checkpoint=$sha"
   running=$n
 
-  args=(-p "/autopilot:autopilot $mode $run" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose)
-  [ -z "${AUTOPILOT_MODEL:-}" ] || args+=(--model "$AUTOPILOT_MODEL")
+  args=(-p "/autopilot:autopilot $mode $run${pw:+ $pw}" --permission-mode auto --add-dir "$HOME/.autopilot" --output-format stream-json --verbose --model "$model")
   stream=$run/sessions/$n.jsonl
   snapshot
   pre_owner=$(owner_lines)

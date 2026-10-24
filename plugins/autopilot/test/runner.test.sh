@@ -45,6 +45,7 @@ sc() {
 
 lim() { printf '{"limit":{"status":"rejected","type":"%s","resets_in":%s,"overage":%s}}' "$1" "$2" "${3:-false}"; }
 set_cap() { sed -i "s/^session-cap:.*/session-cap: $1/" "$PLAN"; }
+nm() { printf 'next-model: %s\n' "$1" >> "$PLAN"; }
 go() {
   OUT=$(bash "$RUNNER" "$repo" .autopilot/runs/t 2>"$W/err")
   RC=$?
@@ -750,7 +751,7 @@ test_checkpoint_refs() {
   local n sha
   for n in 1 2; do
     sha=$(git -C "$repo" rev-parse --verify "refs/autopilot/t/$n") || die "ref $n missing"
-    log_has "session=$n start mode=continue checkpoint=$sha"
+    log_has "session=$n start mode=continue model=opus checkpoint=$sha"
   done
   git -C "$repo" ls-tree -r --name-only refs/autopilot/t/1 | grep -qx new.txt || die "new.txt not in checkpoint"
   eq "$(git -C "$repo" diff --cached)" "$cached" "index"
@@ -798,6 +799,54 @@ test_flags() {
   for f in "--permission-mode auto" "--add-dir $HOME/.autopilot" "--output-format stream-json" "--verbose" "--model haiku" "COMPACT=200000"; do
     call_has 1 "$f"
   done
+}
+test_model_default_opus() {
+  setup; sc 1 "$DONE"; go
+  call_has 1 "--model opus"; call_has 1 "continue .autopilot/runs/t opus --permission-mode"
+  log_has "session=1 start mode=continue model=opus checkpoint="
+}
+test_model_empty_line_opus() { setup; nm ''; sc 1 "$DONE"; go; expect_calls 1; call_has 1 "--model opus"; }
+test_model_next_sonnet() {
+  setup; nm sonnet; sc 1 "$DONE"; go
+  call_has 1 "--model sonnet"; call_has 1 "continue .autopilot/runs/t sonnet --permission-mode"; log_has "model=sonnet"
+}
+test_model_trailing_spaces() { setup; nm 'sonnet   '; sc 1 "$DONE"; go; call_has 1 "--model sonnet"; }
+test_model_header_line_wins() {
+  setup; nm sonnet; printf '## Handoff\nnext-model: haiku\n' >> "$PLAN"; sc 1 "$DONE"; go; call_has 1 "--model sonnet"
+}
+test_model_invalid_refused() {
+  setup; nm Sonnet; sc 1 "$DONE"; go
+  [ "$RC" -ne 0 ] || die "exit 0"; grep -qF next-model <<<"$ERR" || die "stderr '$ERR'"; expect_calls 0
+}
+test_model_invalid_mid_run() {
+  setup; sc 1 "$NEXT" '{"exec":"echo next-model: sonet >> .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  expect_calls 1; stopped ".autopilot/runs/t/plan.md has no valid next-model"
+}
+test_model_exec_path_invalid_stops() {
+  setup; nm gpt; sc 1 "$DONE"; AUTOPILOT_RESUME_MODE='continue' go
+  expect_calls 0; stopped ".autopilot/runs/t/plan.md has no valid next-model"
+}
+test_model_override() {
+  setup; nm sonnet; export AUTOPILOT_MODEL=haiku; sc 1 "$DONE"; go
+  call_has 1 "--model haiku"; call_has 1 "continue .autopilot/runs/t --permission-mode"; log_has "model=override:haiku"
+  ! calls | grep -qF -- "--model sonnet" || die "sonnet passed under override"
+}
+test_model_wrapup_opus() {
+  setup; nm sonnet; sc 1 "$NEXT" "$W81"; sc 2 "$DONE"; go
+  call_has 1 "--model sonnet"; call_has 2 "wrapup .autopilot/runs/t opus --permission-mode"; call_has 2 "--model opus"
+}
+test_model_follows_rewrite() {
+  setup; sc 1 "$NEXT" '{"exec":"echo next-model: sonnet >> .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
+  call_has 1 "--model opus"; call_has 2 "--model sonnet"
+}
+test_model_kept_on_crash() { setup; nm sonnet; sc 1 garbage; sc 2 "$DONE"; go; call_has 1 "--model sonnet"; call_has 2 "--model sonnet"; }
+test_model_kept_on_five_hour() {
+  setup; nm sonnet; sc 1 "" "$(lim five_hour 60)"; sc 2 "$DONE"; go; expect_calls 2; call_has 2 "--model sonnet"
+}
+test_model_after_upgrade() {
+  setup; fake_cache v1 v2; install_v v1; nm sonnet
+  sc 1 "$NEXT" '{"exec":"install_v v2"}'; sc 2 "$DONE"; go_from v1
+  log_has "upgrade v1 -> v2"; call_has 2 "--model sonnet"
 }
 test_claude_env_scrubbed() {
   setup; sc 1 "$DONE"
@@ -962,5 +1011,19 @@ out=$(test_flags 2>/dev/null); t test_flags "$out" $?
 out=$(test_claude_env_scrubbed 2>/dev/null); t test_claude_env_scrubbed "$out" $?
 out=$(test_stream_saved 2>/dev/null); t test_stream_saved "$out" $?
 out=$(test_killed_logs_end 2>/dev/null); t test_killed_logs_end "$out" $?
+out=$(test_model_default_opus 2>/dev/null); t test_model_default_opus "$out" $?
+out=$(test_model_empty_line_opus 2>/dev/null); t test_model_empty_line_opus "$out" $?
+out=$(test_model_next_sonnet 2>/dev/null); t test_model_next_sonnet "$out" $?
+out=$(test_model_trailing_spaces 2>/dev/null); t test_model_trailing_spaces "$out" $?
+out=$(test_model_header_line_wins 2>/dev/null); t test_model_header_line_wins "$out" $?
+out=$(test_model_invalid_refused 2>/dev/null); t test_model_invalid_refused "$out" $?
+out=$(test_model_invalid_mid_run 2>/dev/null); t test_model_invalid_mid_run "$out" $?
+out=$(test_model_exec_path_invalid_stops 2>/dev/null); t test_model_exec_path_invalid_stops "$out" $?
+out=$(test_model_override 2>/dev/null); t test_model_override "$out" $?
+out=$(test_model_wrapup_opus 2>/dev/null); t test_model_wrapup_opus "$out" $?
+out=$(test_model_follows_rewrite 2>/dev/null); t test_model_follows_rewrite "$out" $?
+out=$(test_model_kept_on_crash 2>/dev/null); t test_model_kept_on_crash "$out" $?
+out=$(test_model_kept_on_five_hour 2>/dev/null); t test_model_kept_on_five_hour "$out" $?
+out=$(test_model_after_upgrade 2>/dev/null); t test_model_after_upgrade "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail
