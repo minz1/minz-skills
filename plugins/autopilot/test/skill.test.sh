@@ -66,6 +66,14 @@ test_phase_skills() {
   for k in work retry done review; do printf '%s\n' "$block" | grep -q "^$k: " || die "rules template ## Skills lacks $k:"; done
 }
 
+test_model_routing() {
+  in_skill 'continue <run-dir> [<model>]' 'wrapup <run-dir> [<model>]' '## Models' 'effective model' 'attempt N failed' \
+    'are not failed attempts' 'has invalid model' 'bounced: item N needs' 'now: survey' 'changed the queue' \
+    'Never tag the Final item' 'right before the exit line' 'Subagents keep their own model' 'model tag'
+  grep -q '^next-model:' "$PLAN" || die "template lacks next-model:"
+  grep -q 'model: sonnet' "$PLAN" || die "template lacks a tagged example item"
+}
+
 test_skill_refs_exist() {
   local root=$DIR/../../superpowers/skills ref
   for ref in $(grep -rhoE 'superpowers:[a-z-]+' "$DIR/../skills" "$root" | sort -u); do
@@ -97,5 +105,6 @@ out=$(test_owner_entries_resolved 2>/dev/null); t test_owner_entries_resolved "$
 out=$(test_dash_launcher_register 2>/dev/null); t test_dash_launcher_register "$out" $?
 out=$(test_phase_skills 2>/dev/null); t test_phase_skills "$out" $?
 out=$(test_skill_refs_exist 2>/dev/null); t test_skill_refs_exist "$out" $?
+out=$(test_model_routing 2>/dev/null); t test_model_routing "$out" $?
 for f in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do grep -q "^out=\$($f " "$0" || { echo "FAIL $f: not registered"; fail=1; }; done
 exit $fail

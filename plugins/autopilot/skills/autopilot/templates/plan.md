@@ -8,6 +8,7 @@ session-cap: 60
 owner-notes-applied: 0
 owner-notes-used:
 now:
+next-model:
 serves: <paired consumer only: peers it serves; else delete>
 ahead-cap: 2
 ack-timeout: 6h
@@ -18,7 +19,7 @@ and what is explicitly out of scope>
 
 ## Queue
 - [ ] 1. <item>    check: <command>
-- [ ] 2. <item>    after: 1, check: <command>
+- [ ] 2. <item>    after: 1, model: sonnet, check: <command>
 ### Discovered
 ### Final
 - [ ] 3. <final item, e.g. merge branches, reviewer, push per .autopilot/rules.md. Paired: no `[c]` or `[p]` items left, every post in this repo's board file is acked or replaced, and the default branch equals the last acked sha>
