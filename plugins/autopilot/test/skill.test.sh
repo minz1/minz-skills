@@ -68,9 +68,10 @@ test_phase_skills() {
 
 test_model_routing() {
   in_skill 'continue <run-dir> [<model>]' 'wrapup <run-dir> [<model>]' '## Models' 'effective model' 'attempt N failed' \
-    'are not failed attempts' 'has invalid model' 'bounced: item N needs' 'now: survey' 'changed the queue' \
+    'are not failed attempts' 'has invalid model' 'bounced: item N needs' 'now: survey' 'put another item ahead of it' 'will most likely work no item' \
     'Never tag the Final item' 'right before the exit line' 'Subagents keep their own model' 'model tag' 'A survey has no check'
   grep -q '^next-model:' "$PLAN" || die "template lacks next-model:"
+  local k; for k in 'changed the queue' 'WAIT` with nothing in progress'; do ! grep -qF -- "$k" "$SKILL" || die "SKILL.md still has '$k'"; done
   grep -q 'model: sonnet' "$PLAN" || die "template lacks a tagged example item"
 }
 
