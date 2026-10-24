@@ -835,6 +835,14 @@ test_model_wrapup_opus() {
   setup; nm sonnet; sc 1 "$NEXT" "$W81"; sc 2 "$DONE"; go
   call_has 1 "--model sonnet"; call_has 2 "wrapup .autopilot/runs/t opus --permission-mode"; call_has 2 "--model opus"
 }
+test_model_cap_wrapup_opus() {
+  setup; set_cap 1; nm sonnet; sc 1 "$NEXT"; sc 2 "$DONE"; go
+  call_has 1 "--model sonnet"; call_has 2 "wrapup .autopilot/runs/t opus --permission-mode"; call_has 2 "--model opus"
+}
+test_model_exec_path_wrapup_opus() {
+  setup; nm sonnet; sc 1 "$DONE"; AUTOPILOT_RESUME_MODE=wrapup go
+  call_has 1 "wrapup .autopilot/runs/t opus --permission-mode"; call_has 1 "--model opus"
+}
 test_model_follows_rewrite() {
   setup; sc 1 "$NEXT" '{"exec":"echo next-model: sonnet >> .autopilot/runs/t/plan.md"}'; sc 2 "$DONE"; go
   call_has 1 "--model opus"; call_has 2 "--model sonnet"
@@ -1022,6 +1030,8 @@ out=$(test_model_exec_path_invalid_stops 2>/dev/null); t test_model_exec_path_in
 out=$(test_model_override 2>/dev/null); t test_model_override "$out" $?
 out=$(test_model_wrapup_opus 2>/dev/null); t test_model_wrapup_opus "$out" $?
 out=$(test_model_follows_rewrite 2>/dev/null); t test_model_follows_rewrite "$out" $?
+out=$(test_model_cap_wrapup_opus 2>/dev/null); t test_model_cap_wrapup_opus "$out" $?
+out=$(test_model_exec_path_wrapup_opus 2>/dev/null); t test_model_exec_path_wrapup_opus "$out" $?
 out=$(test_model_kept_on_crash 2>/dev/null); t test_model_kept_on_crash "$out" $?
 out=$(test_model_kept_on_five_hour 2>/dev/null); t test_model_kept_on_five_hour "$out" $?
 out=$(test_model_after_upgrade 2>/dev/null); t test_model_after_upgrade "$out" $?
