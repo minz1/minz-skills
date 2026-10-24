@@ -341,13 +341,10 @@ while :; do
   n=$((${n:-0} + 1))
   sha=$(checkpoint "$n")
   [ -n "$sha" ] || stop "checkpoint failed"
-  if [ -n "${AUTOPILOT_MODEL:-}" ]; then
-    model=$AUTOPILOT_MODEL pw= label=override:$AUTOPILOT_MODEL
-  else
-    model=${next_model:-opus}
-    [ "$mode" != wrapup ] || model=opus
-    pw=$model label=$model
-  fi
+  model=${next_model:-opus}
+  [ "$mode" != wrapup ] || model=opus
+  pw=$model label=$model
+  [ -z "${AUTOPILOT_MODEL:-}" ] || model=$AUTOPILOT_MODEL pw= label=override:$AUTOPILOT_MODEL
   log "session=$n start mode=$mode model=$label checkpoint=$sha"
   running=$n
 

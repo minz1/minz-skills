@@ -72,7 +72,7 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
 8. Rewrite the Handoff section of `plan.md` (state, open branches and worktrees, what the next session must know; at most ~40 lines). A remote SHA named in the Handoff must come from a `git fetch` + `git rev-parse` you ran: only name one if you fetched it in that session. It lists every running fleet agent with its log path and last-known state (running, exited N, silent since). Append the long version to `<run-dir>/log.md`.
 9. Just before choosing the exit word, re-read every board file (when the plan has a board). If a request addressed to this repo is unanswered and this session could act on it now, exit `NEXT`; if it is blocked (behind another post, or an owner note says hold), exit `WAIT <cap>` and the board wake brings the run back. Before exiting `STOP`, commit or revert, or list every dirty path (`git status --porcelain`) in the Handoff.
 
-   Write `next-model:` (see "Models") right before the exit line, once the exit word is final.
+   Write `next-model:` (see "Models").
 
    Final message: exactly one exit line, `AUTOPILOT: <word>`, in plain text (no bold, no code span, nothing before it on the line). It must be the last such line of the message; other plugins' closing text may follow it and is ignored. `<word>` is one of:
    - `NEXT`: relaunch now
@@ -83,7 +83,7 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
 
 ## wrapup
 
-Invoked as `wrapup <run-dir> [<model>]` (the runner passes `opus` unless the owner's `AUTOPILOT_MODEL` override is set). Follow `continue` but skip step 5 and the `WAIT` and `NEXT` exits in steps 4 and 9: work only the Final item. Open and blocked items do not block it; carry out the Final item's own instruction and run its check against whatever is done. Nothing new to commit is not a failure: still create any branch it names, at `HEAD`. A ship post still waiting for its ack (not in a legacy plan): list it in `## Owner`, leave the default branch at the last acked sha, and do not count it as done. Then exit `AUTOPILOT: DONE`, or `AUTOPILOT: STOP <reason>` if the stop list stops the Final item.
+Invoked as `wrapup <run-dir> [<model>]`. Follow `continue` but skip step 5 and the `WAIT` and `NEXT` exits in steps 4 and 9: work only the Final item. Open and blocked items do not block it; carry out the Final item's own instruction and run its check against whatever is done. Nothing new to commit is not a failure: still create any branch it names, at `HEAD`. A ship post still waiting for its ack (not in a legacy plan): list it in `## Owner`, leave the default branch at the last acked sha, and do not count it as done. Then exit `AUTOPILOT: DONE`, or `AUTOPILOT: STOP <reason>` if the stop list stops the Final item.
 
 ## Item states and shipping
 
@@ -107,7 +107,6 @@ A session started with a model works an item only on that item's effective model
 - Mismatch: do not work it. Write `now: <item>` (`now: survey` for a survey) and `next-model: <effective model>`, put `bounced: item N needs <model>` as the first line of the Handoff without rewriting the rest, append the same line to `log.md`, skip steps 6 to 8, and exit `AUTOPILOT: NEXT`.
 - Any model does steps 3 and 4 (owner notes, board answers including reviewing and deploying a peer's sha, acks, fast-forwards) and 5.1 (shipping a `[c]` prefix). Subagents keep their own model.
 - `next-model:` in the plan header is the next session's model; add it after `now:` if missing. Write it right before the exit line, once the exit word is final, for any `NEXT` or `WAIT`: the effective model of the item the next session will most likely work (after a `WAIT` with an item still in progress, that item; `now:` stays set); `sonnet` when it will most likely work no item (only re-check, answer the board and wait again). `DONE` or `STOP`: leave it.
-- The runner launches the next session with `next-model:` (`opus` when empty); wrapup always runs `opus`. An invalid value stops the run.
 
 ## Owner decisions
 
