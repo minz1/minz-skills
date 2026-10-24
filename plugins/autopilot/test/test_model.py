@@ -301,3 +301,9 @@ def test_board_styles(tmp_path: Path) -> None:
     assert "magenta" in styles_of(t, "owner → x:")
     assert "bold green" in styles_of(t, "done a-1")
     assert "bold red" in styles_of(t, "a: runner stopped")
+
+
+def test_current_item_strips_model_tag() -> None:
+    """A model: tail is not part of the item title."""
+    plan = "now: 9\n## Queue\n- [ ] 9. nine  model: sonnet, check: x\n"
+    assert model.current_item(plan) == "9. nine"

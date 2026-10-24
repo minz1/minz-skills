@@ -20,7 +20,7 @@ EXIT = re.compile(r" exit=([A-Za-z]+)")
 WEEKLY = re.compile(r"^(\S+) session=\d+ end .* weekly=([0-9.]+)")
 POST = re.compile(r"^- (?:(\S+Z) )?([A-Za-z0-9_.-]+-[0-9]+)(?: \(replaces ([A-Za-z0-9_.-]+-[0-9]+)\))? → ([^:]+)")
 ANSWER = re.compile(r"^- (?:\S+Z )?(?:(?:ack|nack|reject) )+([A-Za-z0-9_.-]+-[0-9]+)(?![0-9])")
-TAIL_START = re.compile(r"\s{2,}(after|check|waiting|progress):")
+TAIL_START = re.compile(r"\s{2,}(after|check|waiting|progress|model):")
 STALL_AFTER = 3900
 QUIET_AFTER = 300
 WINDOW = 6 * 3600
