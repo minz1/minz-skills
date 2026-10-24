@@ -63,7 +63,7 @@ Authority: the approved `plan.md` and the repo's `.autopilot/rules.md` are the o
    1. shipping to a peer and no post of yours is waiting for its ack: the next `[c]` prefix (ship it as one post)
    2. the first `[ ]` item (or batch) whose `after:` items are `[c]`, `[p]` or `[x]`, while fewer than `ahead-cap` items are `[c]` or `[p]`; skip an item with `waiting: <id>` until an `ack <id>` line appears in another repo's board file; then remove `waiting:` and work it
    3. a `[!]` item (every `[!]` is still unrevisited): its one revisit, a fresh attempt that starts from its failure notes in `log.md` and tries a different approach
-   4. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty
+   4. open scope only: survey for more in-scope work using the mandate's sources; add new items under Discovered with where they came from and a check. An empty survey leaves the queue empty. A survey has no check: at step 7 only clear `now:`
    5. the Final item
 
    Then apply "Models" to the pick (any pick but 1).
