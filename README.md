@@ -39,7 +39,7 @@ A waiting run wakes as soon as the job it's waiting on exits, a peer posts to it
 
 ## superpowers
 
-My fork of seven skills from [obra/superpowers](https://github.com/obra/superpowers): `brainstorming`, `writing-plans`, `executing-plans`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `receiving-code-review`. `executing-plans` and `receiving-code-review` are trimmed: a progress ledger, logged rulings and graded review findings, without upstream's worktree and branch-finishing steps. Claude picks them up on its own; you can also call them by name, e.g. `/superpowers:brainstorming`.
+My fork of seven skills from [obra/superpowers](https://github.com/obra/superpowers): `brainstorming`, `writing-plans`, `executing-plans`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `receiving-code-review`. `executing-plans` and `receiving-code-review` are trimmed: a progress ledger, logged rulings and graded review findings, without upstream's worktree and branch-finishing steps. `brainstorming` follows upstream v7.0.1, but small changes skip the plan and visuals are plain HTML files and Mermaid instead of upstream's browser server. Claude picks them up on its own; you can also call them by name, e.g. `/superpowers:brainstorming`.
 
 ## License
 
