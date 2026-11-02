@@ -148,7 +148,8 @@ def test_info_rows(make_run: MakeRun) -> None:
     assert rows[2].startswith("last N W N")
     assert "ctx 45k" in rows[2]
     assert "notes 4/5 (1 pending)" in rows[3]
-    assert "owner 2" in rows[3]
+    assert "owner" not in rows[3]
+    assert "· owner 2 ·" in state(live_ref(d), NOW - 10).label
     d = make_run("q", plan="- [x] 1. a\n- [ ] 2. b  waiting: c\n")
     rows = [t.plain for t in state(live_ref(d)).info]
     assert rows[0] == "item 2. b"
@@ -307,3 +308,30 @@ def test_current_item_strips_model_tag() -> None:
     """A model: tail is not part of the item title."""
     plan = "now: 9\n## Queue\n- [ ] 9. nine  model: sonnet, check: x\n"
     assert model.current_item(plan) == "9. nine"
+
+
+def test_fyi_items_do_not_need_the_owner(make_run: MakeRun) -> None:
+    """FYI lines are read apart from Owner and neither block finishing nor mark the run as needing you."""
+    plan = "session-cap: 5\n## Owner\n## FYI\n- ruling x, overrule with a note\n## Handoff\n- not this\n"
+    assert model.fyi_items(plan) == ["- ruling x, overrule with a note"]
+    assert model.owner_items(plan) == []
+    assert finished(make_run, f"{iso(NOW)} stopped: done\n", plan)
+    d = make_run("fyi", plan=plan, log=f"{iso(NOW - 60)} session=1 start\n")
+    s = state(live_ref(d), NOW)
+    assert s.st == "working"
+    assert "fyi 1" in s.info[3].plain
+
+
+def test_answer_of() -> None:
+    """The latest note quoting an owner item is its answer, applied once the run's counter passes it."""
+    item = "- pick a colour for the " + "x" * 80
+    quote = model.answer_quote(item)
+    assert quote == f'Re owner item "{item[2:72]}": '
+    owner_md = (
+        f"- 2026-11-02T10:00:00Z {quote}red\n- 2026-11-02T10:05:00Z other\n- 2026-11-02T10:09:00Z [once] {quote}blue\n"
+    )
+    assert model.answer_of(item, owner_md, 2) == model.Answer(3, "blue", applied=False)
+    assert model.answer_of(item, owner_md, 3) == model.Answer(3, "blue", applied=True)
+    assert model.answer_of("- something else", owner_md, 3) is None
+    assert model.notes_applied("owner-notes-applied: 4\n") == 4
+    assert model.notes_applied("owner-notes-applied: x\n") == 0

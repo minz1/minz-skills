@@ -15,6 +15,7 @@ import probe
 import pytest
 from conftest import MakeRun
 from rich.text import Text
+from textual.command import CommandList
 from textual.pilot import Pilot
 from textual.widgets import (
     Button,
@@ -133,7 +134,7 @@ async def test_usage_bar_visible_200x50(isolated: Path, make_run: MakeRun) -> No
 
 
 async def test_focus_start_and_keys(isolated: Path, make_run: MakeRun) -> None:
-    """Pane 1 starts focused; digits and Tab move focus and the marker follows at once."""
+    """Pane 1 starts focused; digits and Tab move focus."""
     a, b = repo_of(working_run(make_run, "a")), repo_of(working_run(make_run, "b"))
     register(isolated, a, b)
     d = dash(isolated, live(a, b))
@@ -143,11 +144,8 @@ async def test_focus_start_and_keys(isolated: Path, make_run: MakeRun) -> None:
         assert p[0].has_focus_within
         await pilot.press("2")
         assert p[1].has_focus_within
-        assert "◆" in p[1].head_text.plain
-        assert "◆" not in p[0].head_text.plain
         await pilot.press("shift+tab")
         assert p[0].has_focus_within
-        assert "◆" in p[0].head_text.plain
         await pilot.press("tab")
         assert p[1].has_focus_within
 
@@ -304,9 +302,9 @@ async def test_key_budget(isolated: Path, make_run: MakeRun) -> None:
 
 def test_head_line_is_plain_text() -> None:
     """Header text is a Rich Text built from plain strings, never markup."""
-    head = app.head_line(1, "a[/b]", "x", focused=True)
+    head = app.head_line(1, "a[/b]", "x")
     assert isinstance(head, Text)
-    assert head.plain == "1  ◆ a[/b] · x"
+    assert head.plain == "1  a[/b] · x"
 
 
 class Recorder:
@@ -577,7 +575,7 @@ async def test_owner_tab_lists_finished_runs(isolated: Path, make_run: MakeRun) 
     d = dash(isolated)
     async with d.run_test(size=(200, 50)) as pilot:
         await settle(pilot)
-        assert tab_label(d, "owner") == "Owner (1)"
+        assert tab_label(d, "owner") == "Owner (1 need you)"
         await pilot.press("o")
         await pilot.pause()
         items = d.query_one("#ownerlist", ListView).children
@@ -616,7 +614,7 @@ async def test_owner_empty_message(isolated: Path, make_run: MakeRun) -> None:
         await settle(pilot)
         await pilot.press("o")
         await pilot.pause()
-        assert tab_label(d, "owner") == "Owner (0)"
+        assert tab_label(d, "owner") == "Owner (0 need you)"
         assert "nothing is waiting on you" in d.query_one("#owner-text", Markdown).source
 
 
@@ -860,3 +858,218 @@ async def test_owner_answer_dropped_when_item_resolves(
         await pilot.press("enter")
         await pilot.pause()
     assert rec.calls == []
+
+
+async def test_owner_answered_and_fyi(isolated: Path, make_run: MakeRun) -> None:
+    """Answered items say so, unanswered ones count as needing you, and FYI lines get their own tab."""
+    plan = owner_plan("A asked", "B open") + "owner-notes-applied: 0\n## FYI\n- ruling R, overrule with a note\n"
+    owner_md = f"- {iso(NOW)} {model.answer_quote('- A asked')}go with red\n"
+    run_dir = make_run("r", plan=plan, owner_md=owner_md, log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        assert tab_label(d, "owner") == "Owner (1 need you)"
+        assert tab_label(d, "fyi") == "FYI (1)"
+        await pilot.press("o")
+        await pilot.pause()
+        rows = [str(i.query_one(Label).content) for i in d.query_one("#ownerlist", ListView).children]
+        assert rows[0].startswith("✓ r A asked")
+        assert "answered in note 1 (not applied yet)" in rows[0]
+        assert rows[1].startswith("● r B open")
+        assert "Your answer:** go with red" in d.query_one("#owner-text", Markdown).source
+        await pilot.press("i")
+        await pilot.pause()
+        assert d.query_one(TabbedContent).active == "fyi"
+        assert d.query_one("#fyi-scroll").has_focus
+        assert "ruling R, overrule with a note" in str(d.query_one("#fyi-text", Static).content)
+
+
+async def test_escape_leaves_answer_box(isolated: Path, make_run: MakeRun) -> None:
+    """Esc in the answer box goes back to the list, so tab keys work again."""
+    run_dir = make_run("r", plan=owner_plan("pick"), log=f"{iso(NOW)} stopped: done\n")
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated)
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+        await pilot.press("o", "enter")
+        assert d.query_one("#answer", Input).has_focus
+        await pilot.press("escape")
+        assert d.query_one("#ownerlist", ListView).has_focus
+        await pilot.press("f")
+        assert d.query_one(TabbedContent).active == "feed-tab"
+
+
+async def test_arrows_move_between_runs(isolated: Path, make_run: MakeRun) -> None:
+    """Left and right focus the previous and next run, wrapping around."""
+    repos = [repo_of(working_run(make_run, n)) for n in "abc"]
+    register(isolated, *repos)
+    d = dash(isolated, live(*repos))
+    async with d.run_test(size=(200, 50)) as pilot:
+        await settle(pilot)
+
+        def focused() -> int:
+            return next(i for i, p in enumerate(panes(d)) if p.has_focus_within)
+
+        assert focused() == 0
+        await pilot.press("right")
+        assert focused() == 1
+        await pilot.press("left", "left")
+        assert focused() == 2
+
+
+async def test_double_click_opens_detail(isolated: Path, make_run: MakeRun) -> None:
+    """A click selects a run; a double click opens its details."""
+    repo = repo_of(detail_run(make_run))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.click(app.RunPane)
+        await pilot.pause()
+        assert not isinstance(d.screen, app.DetailScreen)
+        await pilot.click(app.RunPane, times=2)
+        await pilot.pause()
+        assert isinstance(d.screen, app.DetailScreen)
+
+
+async def test_detail_mouse(isolated: Path, make_run: MakeRun) -> None:
+    """Detail tabs switch on a click and take focus, and the footer's back key closes the screen."""
+    repo = repo_of(detail_run(make_run))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert d.screen.query_one("#d1").has_focus
+        await pilot.click("#detail-tabs Tab#d3")
+        await pilot.pause()
+        assert detail_tab(d) == "d3"
+        assert d.screen.query_one("#d3").has_focus
+        await pilot.click("Footer FooterKey")
+        await pilot.pause()
+        assert not isinstance(d.screen, app.DetailScreen)
+
+
+async def test_detail_owner_tab_shows_fyi(isolated: Path, make_run: MakeRun) -> None:
+    """A run's detail Owner tab lists its FYI lines after its owner items."""
+    plan = owner_plan("decide") + "## FYI\n- ruling R\n"
+    run_dir = make_run("r", plan=plan, log=f"{iso(NOW - 60)} session=1 start\n")
+    repo = repo_of(run_dir)
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(160, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter", "4")
+        await pilot.pause()
+        assert d.screen.query_one("#d4 Markdown", Markdown).source == "- decide\n\n**FYI**\n\n- ruling R"
+
+
+async def until(pilot: Pilot[None], done: Callable[[], bool]) -> None:
+    """Wait for a condition the palette meets after its timers fire, giving up after 2 s."""
+    for _ in range(100):
+        if done():
+            return
+        await pilot.pause(0.02)
+    assert done()
+
+
+def widest(log: RichLog) -> tuple[int, int]:
+    """Return a log's text width and its widest line."""
+    return log.scrollable_content_region.width, max(line.cell_length for line in log.lines)
+
+
+async def test_lines_fit_and_rewrap(isolated: Path, make_run: MakeRun) -> None:
+    """Stream and feed lines wrap to their width at 80 and 60 columns, also after a resize."""
+    long = " ".join(f"word{i}" for i in range(60))
+    event = {
+        "type": "assistant",
+        "timestamp": "2026-10-23T14:59:00Z",
+        "message": {"content": [{"type": "text", "text": long}]},
+    }
+    log = f"{iso(NOW - 120)} session=1 start mode=continue\n"
+    run_dir = make_run("a", log=log, owner_md=f"- {iso(NOW - 60)} {long}\n", sessions={1: [event]})
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated, live(repo_of(run_dir)))
+    async with d.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("f")
+        await pilot.pause()
+        feed = d.query_one("#feed", RichLog)
+        assert any("word59" in t for t in feed_lines(d))
+        for size in ((80, 24), (60, 24)):
+            await pilot.resize_terminal(*size)
+            await pilot.pause()
+            width, wide = widest(feed)
+            assert wide <= width < size[0]
+        await pilot.press("g")
+        await pilot.pause()
+        stream = panes(d)[0].stream_log
+        width, wide = widest(stream)
+        assert wide <= width < 60
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        assert widest(stream)[1] <= widest(stream)[0]
+        assert any("word59" in t for t in log_text(panes(d)[0]))
+
+
+async def test_too_small_state(isolated: Path, make_run: MakeRun) -> None:
+    """Below 60x20 the dash names the size it needs, and recovers when the terminal grows."""
+    register(isolated, repo_of(working_run(make_run, "a")))
+    d = dash(isolated)
+    async with d.run_test(size=(59, 24)) as pilot:
+        await settle(pilot)
+        small = d.query_one("#too-small", Static)
+        assert small.region.height > 0
+        assert "needs 60x20, this is 59x24" in str(small.render())
+        assert d.query_one(TabbedContent).region.height == 0
+        await pilot.resize_terminal(60, 19)
+        await pilot.pause()
+        assert "this is 60x19" in str(small.render())
+        await pilot.resize_terminal(60, 20)
+        await pilot.pause()
+        assert small.region.height == 0
+        assert d.query_one(TabbedContent).region.height > 0
+
+
+async def test_palette_lists_and_runs_keys(isolated: Path, make_run: MakeRun) -> None:
+    """? opens a palette of the keys that work here, and picking one runs it."""
+    repo = repo_of(working_run(make_run, "a"))
+    register(isolated, repo)
+    d = dash(isolated, live(repo))
+    async with d.run_test(size=(60, 24)) as pilot:
+        await settle(pilot)
+        titles = [c.title for c in d.get_system_commands(d.screen)]
+        for want in ("quit  (q)", "details  (⏎)", "fyi  (i)", "compact  (x)", "next run  (→)"):
+            assert want in titles
+        assert len(titles) == len(set(titles))
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press(*"compact")
+        hits = d.screen.query_one(CommandList)
+        await until(pilot, lambda: hits.option_count == 1)
+        await pilot.press("enter")
+        await until(pilot, lambda: panes(d)[0].compact)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(d.screen, app.DetailScreen)
+        titles = [c.title for c in d.get_system_commands(d.screen)]
+        assert titles[:1] == ["back  (esc)"]
+        assert "note  (n)" not in titles
+        assert len(titles) == len(set(titles))
+
+
+async def test_ctrl_c_quits(isolated: Path, make_run: MakeRun) -> None:
+    """Ctrl+C quits, even from the answer box."""
+    run_dir = make_run("r", plan=owner_plan("decide"), log=f"{iso(NOW - 60)} session=1 start\n")
+    register(isolated, repo_of(run_dir))
+    d = dash(isolated, live(repo_of(run_dir)))
+    async with d.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("o", "enter")
+        await pilot.pause()
+        assert d.focused is d.query_one("#answer", Input)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert not d.is_running

@@ -31,7 +31,7 @@ Runs a queue of work unattended, one fresh Claude session per item, so context s
 /autopilot launcher        put an `autopilot` command in ~/.local/bin
 ```
 
-To watch everything at once, run `autopilot dash` in a terminal. It shows every run you've started (or added with `autopilot register` in its repo), live: what each session is doing right now, a feed of what happened since you last looked, the owner items waiting on you, and how fast weekly usage is going. You can answer an owner item, send a note, or start and stop a run from there without asking Claude. The dash needs [uv](https://docs.astral.sh/uv/); the first start downloads Textual, so it takes a few seconds.
+To watch everything at once, run `autopilot dash` in a terminal. It shows every run you've started (or added with `autopilot register` in its repo), live: what each session is doing right now, a feed of what happened since you last looked, the owner items waiting on you (marked once you've answered), an FYI list of things runs want you to know but don't need an answer to, and how fast weekly usage is going. You can answer an owner item, send a note, or start and stop a run from there without asking Claude, with the keyboard or the mouse. The dash needs [uv](https://docs.astral.sh/uv/); the first start downloads Textual, so it takes a few seconds.
 
 Each repo needs `.autopilot/rules.md`: the checks, what may be pushed or deployed mid-run, and what must stop the run. `/autopilot plan` drafts it with you the first time, including a `## Skills` section that picks, from the skills you have installed, which ones sessions use for item work, retries, the check before an item counts as done, and review findings. Runs live in `.autopilot/runs/`, which `plan` adds to `.gitignore`.
 

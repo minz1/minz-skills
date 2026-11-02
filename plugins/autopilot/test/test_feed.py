@@ -133,3 +133,16 @@ def test_result_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     feed.cached_result(p)
     assert len(calls) == 2
     assert feed.cached_result(tmp_path / "gone") == ""
+
+
+def test_long_lines_are_whole(tmp_path: Path, make_run: MakeRun) -> None:
+    """Feed lines keep their full text; the feed wraps them."""
+    long = "word " * 60
+    d = make_run(
+        "r",
+        log='2026-10-23T14:00:00Z session=1 end exit=NEXT detail=""\n',
+        owner_md=f"- 2026-10-23T14:01:00Z {long}\n",
+        board={"r.md": f"- 2026-10-23T14:02:00Z r-1 → p: {long}\n"},
+    )
+    got = [e.body.plain for e in events([d], [tmp_path / "board"], result=long)]
+    assert all(long.strip() in g for g in got), got

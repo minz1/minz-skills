@@ -3,14 +3,16 @@
 
 import asyncio
 import contextlib
+import functools
 import logging
 import math
 import os
+import signal
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 import actions
 import feed
@@ -19,8 +21,9 @@ import probe
 import stream
 from rich.text import Text
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding, BindingType
+from textual.command import CommandPalette
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
@@ -37,17 +40,21 @@ from textual.widgets import (
     RadioSet,
     RichLog,
     Static,
+    Tab,
     TabbedContent,
     TabPane,
+    Tabs,
 )
 
 WIDE = 160
+MIN_W, MIN_H = 60, 20
 MIN_PANE = 12
 REFRESH_S = 2
 GIT_S = 10
 SEEN_DEFAULT_S = 4 * 3600
 PANE_LINES = 2000
-MAIN_ACTIONS = {"quit", "note", "control", "detail", "show_tab", "show_all", "flip", "follow", "pane"}
+DOUBLE_CLICK = 2
+MAIN_ACTIONS = {"quit", "note", "control", "detail", "show_tab", "show_all", "flip", "follow", "pane", "step_pane"}
 COLORS = {
     "working": "green",
     "waiting": "blue",
@@ -77,9 +84,9 @@ def pid_alive(pid: str) -> bool:
     return pid.isdigit() and Path(f"/proc/{pid}").exists()
 
 
-def head_line(num: int, repo: str, label: str, *, focused: bool) -> Text:
+def head_line(num: int, repo: str, label: str) -> Text:
     """Build a pane's header line."""
-    return Text(f"{num}  {'◆ ' if focused else ''}{repo} · {label}")
+    return Text(f"{num}  {repo} · {label}")
 
 
 @dataclass
@@ -138,6 +145,29 @@ class RunGrid(Grid):
         self.fit()
 
 
+class PaneLog(RichLog):
+    """A run's stream, where left and right move to the other runs (lines wrap, so they never scroll)."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("left", "app.step_pane(-1)", "prev run"),
+        Binding("right", "app.step_pane(1)", "next run"),
+    ]
+
+
+class FeedLog(RichLog):
+    """The feed, redrawn when its width changes so lines rewrap."""
+
+    wrapped_at = 0
+
+    def on_resize(self, e: events.Resize) -> None:
+        """Rewrap on a width change."""
+        super().on_resize(e)
+        if self.wrapped_at and e.size.width != self.wrapped_at and isinstance(self.app, Dash):
+            self.app.feed_shown = None
+            self.app.render_feed()
+        self.wrapped_at = e.size.width
+
+
 class RunPane(Vertical):
     """One run's header, info rows and session stream."""
 
@@ -147,7 +177,7 @@ class RunPane(Vertical):
     RunPane .head { height: 1; text-style: bold; color: black; padding: 0 1; }
     RunPane .head, RunPane .info { text-wrap: nowrap; text-overflow: ellipsis; }
     RunPane .info { height: 4; }
-    RunPane RichLog { height: 1fr; scrollbar-size-vertical: 1; }
+    RunPane RichLog { height: 1fr; scrollbar-size-vertical: 1; overflow-x: hidden; }
     """
 
     def __init__(self, ref: model.RunRef, num: int, reader: stream.StreamReader) -> None:
@@ -158,12 +188,13 @@ class RunPane(Vertical):
         self.state: model.PaneState | None = None
         self.head_text = Text()
         self.seen_total = 0
+        self.wrapped_at = 0
 
     def compose(self) -> ComposeResult:
         """Lay out the pane."""
         yield Static(classes="head", markup=False)
         yield Static(classes="info", markup=False)
-        yield RichLog(wrap=True, markup=False, auto_scroll=False, max_lines=PANE_LINES)
+        yield PaneLog(wrap=True, markup=False, auto_scroll=False, max_lines=PANE_LINES, min_width=1)
 
     def on_mount(self) -> None:
         """Draw what is known so far."""
@@ -177,26 +208,29 @@ class RunPane(Vertical):
         return self.query_one(RichLog)
 
     def draw_head(self) -> None:
-        """Redraw the header, with the focus marker."""
+        """Redraw the header."""
         st, label = (self.state.st, self.state.label) if self.state else ("waiting", "loading")
-        self.head_text = head_line(self.num, model.clean(self.ref.repo.name), label, focused=self.has_focus_within)
+        self.head_text = head_line(self.num, model.clean(self.ref.repo.name), label)
         head = self.query_one(".head", Static)
         head.update(self.head_text)
         head.styles.background = COLORS[st]
 
     def on_descendant_focus(self, _: events.DescendantFocus) -> None:
-        """Show the focus marker at once and remember this pane."""
-        self.draw_head()
+        """Remember this pane."""
         if isinstance(self.app, Dash):
             self.app.last_pane = (self.ref.repo, self.ref.run_dir)
 
-    def on_descendant_blur(self, _: events.DescendantBlur) -> None:
-        """Drop the focus marker at once."""
-        self.draw_head()
+    def on_resize(self, e: events.Resize) -> None:
+        """Rewrap the stream when the pane's width changes."""
+        if self.wrapped_at and e.size.width != self.wrapped_at:
+            self.rebuild()
+        self.wrapped_at = e.size.width
 
-    def on_click(self) -> None:
-        """Focus the pane on a click anywhere in it."""
+    def on_click(self, e: events.Click) -> None:
+        """Focus the pane on a click anywhere in it; a double click opens its details."""
         self.stream_log.focus()
+        if e.chain >= DOUBLE_CLICK and isinstance(self.app, Dash):
+            self.app.action_detail()
 
     def styled(self, ev: stream.Event) -> Text | None:
         """Style one event, or hide it under the pane's toggles."""
@@ -358,7 +392,7 @@ class DetailScreen(Screen[None]):
         *[Binding(str(i), f"goto({i})", show=False) for i in range(1, len(DETAIL_TABS) + 1)],
     ]
     DEFAULT_CSS = """
-    DetailScreen #detail-tabs, DetailScreen #detail-keys { height: 1; padding: 0 1; background: $panel; }
+    DetailScreen #detail-keys { height: 1; padding: 0 1; background: $panel; }
     DetailScreen ContentSwitcher { height: 1fr; }
     DetailScreen ContentSwitcher > VerticalScroll { height: 1fr; padding: 0 1; }
     """
@@ -371,23 +405,24 @@ class DetailScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         """Lay out the tab bar and the first tab; the others are built when first shown."""
-        yield Static(self.tab_bar("d1"), id="detail-tabs", markup=False)
+        yield Tabs(*(Tab(title, id=f"d{i}") for i, title in enumerate(DETAIL_TABS, 1)), id="detail-tabs")
         with ContentSwitcher(initial="d1"):
             yield VerticalScroll(self.content("d1"), id="d1")
             for i in range(2, len(DETAIL_TABS) + 1):
                 yield VerticalScroll(id=f"d{i}")
         hint = Text(f"{model.clean(self.shown.ref.repo.name)} · run {model.clean(self.shown.ref.run_dir.name)}   ")
-        hint.append("esc back  ←/→ or 1-6 switch tabs", style="dim")
+        hint.append("esc back  ←/→ or 1-6 switch tabs  ↑/↓ PgUp/PgDn scroll", style="dim")
         yield Static(hint, id="detail-keys", markup=False)
+        yield Footer()
 
-    @staticmethod
-    def tab_bar(active: str) -> Text:
-        """Draw the tab titles with the active one highlighted."""
-        out = Text()
-        for i, title in enumerate(DETAIL_TABS, 1):
-            out.append(f" {i} {title} ", style="reverse bold" if active == f"d{i}" else "")
-            out.append(" ")
-        return out
+    def on_mount(self) -> None:
+        """Focus the first tab's content so the keys scroll it."""
+        self.query_one("#d1", VerticalScroll).focus()
+
+    async def on_tabs_tab_activated(self, e: Tabs.TabActivated) -> None:
+        """Show the tab a click picked."""
+        if e.tab.id and e.tab.id != self.active:
+            await self.show_tab(e.tab.id)
 
     def last_result(self) -> str:
         """Return the newest session result, falling back to the session before a running one."""
@@ -407,10 +442,12 @@ class DetailScreen(Screen[None]):
         if tab == "d6":
             board = model.board_of(plan, self.home)
             return Static(model.board_text(board) if board else Text("(no board)", style="dim"), markup=False)
+        fyi = "\n".join(model.fyi_items(plan))
         md = {
             "d1": self.last_result() or "_no session result yet_",
             "d2": "\n".join(model.section(plan, "Handoff")) or "_no handoff_",
-            "d4": "\n".join(model.section(plan, "Owner")) or "_nothing is waiting on you_",
+            "d4": ("\n".join(model.section(plan, "Owner")) or "_nothing is waiting on you_")
+            + (f"\n\n**FYI**\n\n{fyi}" if fyi else ""),
         }[tab]
         return Markdown(model.clean(md), open_links=False)
 
@@ -428,7 +465,8 @@ class DetailScreen(Screen[None]):
             if tab == "d5":
                 self.call_after_refresh(view.scroll_end, animate=False)
         self.query_one(ContentSwitcher).current = tab
-        self.query_one("#detail-tabs", Static).update(self.tab_bar(tab))
+        self.query_one(Tabs).active = tab
+        view.focus()
 
     async def action_step(self, step: int) -> None:
         """Move to the next or previous tab."""
@@ -448,7 +486,7 @@ class Dash(App[None]):
     """The autopilot dashboard."""
 
     TITLE = "autopilot dash"
-    ENABLE_COMMAND_PALETTE = False
+    COMMAND_PALETTE_BINDING = "question_mark"
     CSS = """
     Screen { overflow: hidden; }
     UsageBar { height: 1; padding: 0 1; background: $panel; }
@@ -458,28 +496,36 @@ class Dash(App[None]):
     RunGrid { grid-size: 1; grid-gutter: 0 1; height: 1fr; overflow-y: auto; }
     Screen.-wide RunGrid.multi { grid-size: 2; }
     BoardStrip { height: auto; max-height: 6; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    #feed { height: 1fr; }
+    #feed { height: 1fr; overflow-x: hidden; }
     #owner-split { height: 1fr; }
     #ownerlist { width: 45%; height: 1fr; border: round $panel-lighten-2; }
     #owner-side { width: 1fr; height: 1fr; }
     #owner-item { height: 1fr; border: round $warning; padding: 0 1; }
-    #owner-answer { height: auto; border: round $accent; padding: 0 1; }
+    #owner-answer { height: auto; padding: 0 1; }
     #owner-answer Horizontal { height: auto; }
-    #owner-answer RadioSet { width: 1fr; }
+    #owner-answer RadioSet { width: 1fr; border: none; }
+    #ownerlist Label { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+    #fyi-scroll { height: 1fr; padding: 0 1; }
+    #too-small { display: none; height: 1fr; content-align: center middle; text-align: center; }
+    Screen.-tiny #too-small, Screen.-short #too-small { display: block; }
+    Screen.-tiny #tabs, Screen.-tiny UsageBar, Screen.-short #tabs, Screen.-short UsageBar { display: none; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "quit"),
+        Binding("ctrl+c", "quit", show=False, priority=True),
         Binding("n", "note", "note"),
         Binding("r", "control", "start/stop"),
         Binding("enter", "detail", "details"),
         Binding("g", "show_tab('runs')", "runs"),
         Binding("f", "show_tab('feed-tab')", "feed"),
         Binding("o", "show_tab('owner')", "owner"),
+        Binding("i", "show_tab('fyi')", "fyi"),
         Binding("a", "show_all", "finished runs"),
-        Binding("s", "flip('show_sub')", "subagents", show=False),
-        Binding("t", "flip('show_think')", "thinking", show=False),
-        Binding("x", "flip('compact')", "compact", show=False),
-        Binding("G,end", "follow", "follow", show=False),
+        Binding("s", "flip('show_sub')", "subagents"),
+        Binding("t", "flip('show_think')", "thinking"),
+        Binding("x", "flip('compact')", "compact"),
+        Binding("G,end", "follow", "follow"),
+        Binding("escape", "leave_answer", show=False),
         *[Binding(str(i), f"pane({i})", show=False) for i in range(1, 10)],
     ]
 
@@ -491,7 +537,8 @@ class Dash(App[None]):
     ) -> None:
         """Set up the dash; tests inject home, clock and the tmux probe."""
         super().__init__()
-        self.HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (WIDE, "-wide")]
+        self.HORIZONTAL_BREAKPOINTS = [(0, "-tiny"), (MIN_W, "-narrow"), (WIDE, "-wide")]
+        self.VERTICAL_BREAKPOINTS = [(0, "-short"), (MIN_H, "-tall")]
         self.home = home or Path.home()
         self.clock = clock
         self.sessions_probe = sessions or probe.tmux_sessions
@@ -505,8 +552,8 @@ class Dash(App[None]):
         self.mounted_once = False
         self.last_tab = "runs"
         self.last_pane: tuple[Path, Path] | None = None
-        self.owner_list: list[tuple[Shown, str]] = []
-        self.owner_key: list[tuple[Path, str]] | None = None
+        self.owner_list: list[tuple[Shown, str, model.Answer | None]] = []
+        self.owner_key: list[tuple[Path, str, model.Answer | None]] | None = None
         self.feed_shown: tuple[int, float] | None = None
         try:
             self.seen = float(self.seen_path.read_text())
@@ -524,7 +571,7 @@ class Dash(App[None]):
                 yield RunGrid()
                 yield BoardStrip()
             with TabPane("Feed (0 new)", id="feed-tab"):
-                yield RichLog(id="feed", wrap=True, markup=False, auto_scroll=False)
+                yield FeedLog(id="feed", wrap=True, markup=False, auto_scroll=False, min_width=1)
             with TabPane("Owner (0)", id="owner"), Horizontal(id="owner-split"):
                 yield ListView(id="ownerlist")
                 with Vertical(id="owner-side"):
@@ -536,7 +583,15 @@ class Dash(App[None]):
                                 yield RadioButton(Text("note"), value=True)
                                 yield RadioButton(Text("--once"))
                             yield Button("Send answer", variant="primary", id="send-answer")
+            with TabPane("FYI (0)", id="fyi"), VerticalScroll(id="fyi-scroll"):
+                yield Static(id="fyi-text", markup=False)
+        yield Static(id="too-small")
         yield Footer()
+
+    def on_resize(self, e: events.Resize) -> None:
+        """Say how small the terminal is when it is below the minimum."""
+        msg = f"terminal too small: the dash needs {MIN_W}x{MIN_H}, this is {e.size.width}x{e.size.height}"
+        self.query_one("#too-small", Static).update(Text(msg))
 
     @property
     def seen_path(self) -> Path:
@@ -553,19 +608,33 @@ class Dash(App[None]):
             self.logger.exception("could not write %s", self.seen_path)
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Keep the main screen's keys off dialogs and the detail screen."""
+        """Keep the main screen's keys off dialogs and the detail screen; the palette doesn't count."""
         del parameters
         if action in MAIN_ACTIONS:
-            return self.screen is self.screen_stack[0]
+            under = [s for s in self.screen_stack if not isinstance(s, CommandPalette)]
+            return under[-1] is self.screen_stack[0]
         return True
+
+    def get_system_commands(self, screen: Screen[Any]) -> Iterable[SystemCommand]:
+        """List the keys that work where the palette was opened, so a click can run each one."""
+        seen = set()
+        for node, b, enabled, _ in screen.active_bindings.values():
+            if enabled and b.show and b.description and b.action != "command_palette" and (node, b.action) not in seen:
+                seen.add((node, b.action))
+                run = functools.partial(self.run_action, b.action, node)
+                yield SystemCommand(f"{b.description}  ({self.get_key_display(b)})", "", run)
 
     def on_mount(self) -> None:
         """Start refreshing."""
+        with contextlib.suppress(NotImplementedError):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, self.exit)
         self.kick()
         self.set_interval(REFRESH_S, self.kick)
 
     def on_unmount(self) -> None:
         """Record what was seen and close the error log."""
+        with contextlib.suppress(NotImplementedError):
+            asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
         self.write_seen()
         for h in list(self.logger.handlers):
             h.close()
@@ -721,29 +790,52 @@ class Dash(App[None]):
         self.query_one(TabbedContent).get_tab("feed-tab").label = f"Feed ({new} new)"
 
     async def render_owner(self) -> None:
-        """Refill the owner list when the items changed."""
-        items = [(s, ln) for s in self.snapshot.runs if not s.ref.missing for ln in model.owner_items(s.files.plan)]
-        key = [(s.ref.run_dir, ln) for s, ln in items]
+        """Refill the owner list when the items or their answers changed, and redraw the FYI tab."""
+        self.render_fyi()
+        items = []
+        for s in self.snapshot.runs:
+            if s.ref.missing:
+                continue
+            applied = model.notes_applied(s.files.plan)
+            items += [(s, ln, model.answer_of(ln, s.files.owner_md, applied)) for ln in model.owner_items(s.files.plan)]
+        key = [(s.ref.run_dir, ln, a) for s, ln, a in items]
         if key == self.owner_key:
             return
         lv = self.query_one("#ownerlist", ListView)
         old = lv.index
-        picked = self.owner_key[old] if self.owner_key and old is not None and old < len(self.owner_key) else None
+        picked = self.owner_key[old][:2] if self.owner_key and old is not None and old < len(self.owner_key) else None
         self.owner_key, self.owner_list = key, items
         await lv.clear()
-        rows = [
-            Text.assemble((f"{model.clean(s.ref.repo.name):<11} ", "bold"), model.clean(ln[2:])[:80]) for s, ln in items
-        ]
-        await lv.extend(ListItem(Label(r)) for r in rows)
-        self.query_one(TabbedContent).get_tab("owner").label = f"Owner ({len(items)})"
-        if picked in key:
-            lv.index = key.index(picked)
+        await lv.extend(ListItem(Label(owner_row(s, ln, a))) for s, ln, a in items)
+        waiting = sum(a is None for _, _, a in items)
+        label = Text(f"Owner ({waiting} need you)", style="bold red" if waiting else "")
+        self.query_one(TabbedContent).get_tab("owner").label = label
+        keys = [k[:2] for k in key]
+        if picked in keys:
+            lv.index = keys.index(picked)
         elif picked is None and items:
             lv.index = min(old or 0, len(items) - 1)
         self.show_owner_item()
 
+    def render_fyi(self) -> None:
+        """Redraw the FYI tab: what runs want you to know, with nothing to answer."""
+        out, n = Text(), 0
+        for s in self.snapshot.runs:
+            lines = [] if s.ref.missing else model.fyi_items(s.files.plan)
+            if not lines:
+                continue
+            head = f"{model.clean(s.ref.repo.name)} · run {model.clean(s.ref.run_dir.name)}\n"
+            out.append(head, style="bold reverse")
+            for ln in lines:
+                out.append("• ", style="dim")
+                out.append(model.clean(ln[2:]) + "\n\n")
+            n += len(lines)
+        out.rstrip()
+        self.query_one("#fyi-text", Static).update(out if n else Text("nothing to read", style="dim"))
+        self.query_one(TabbedContent).get_tab("fyi").label = f"FYI ({n})"
+
     def show_owner_item(self) -> None:
-        """Show the highlighted owner item in full."""
+        """Show the highlighted owner item in full, with your answer if you gave one."""
         lv = self.query_one("#ownerlist", ListView)
         md = self.query_one("#owner-text", Markdown)
         if lv.index is None or lv.index >= len(self.owner_list):
@@ -751,9 +843,17 @@ class Dash(App[None]):
                 "_nothing is waiting on you_" if not self.owner_list else "_that item was resolved; pick another_"
             )
             return
-        s, ln = self.owner_list[lv.index]
+        s, ln, a = self.owner_list[lv.index]
         repo, run = model.clean(s.ref.repo.name), model.clean(s.ref.run_dir.name)
-        md.update(f"**{repo}** · run {run} · *needs you*\n\n{model.clean(ln[2:])}")
+        if a is None:
+            status = "**needs you**"
+        else:
+            seen = "applied by a session" if a.applied else "not applied yet"
+            status = f"*answered in note {a.note}, {seen}*"
+        body = f"**{repo}** · run {run} · {status}\n\n{model.clean(ln[2:])}"
+        if a is not None:
+            body += f"\n\n---\n\n**Your answer:** {a.text}"
+        md.update(body)
 
     def on_list_view_highlighted(self) -> None:
         """Follow the owner list's highlight."""
@@ -779,11 +879,16 @@ class Dash(App[None]):
         text = box.value.strip()
         if lv.index is None or lv.index >= len(self.owner_list) or not text:
             return
-        s, ln = self.owner_list[lv.index]
-        note = f'Re owner item "{model.clean(ln[2:])[:70]}": {text}'
+        s, ln, _ = self.owner_list[lv.index]
+        note = model.answer_quote(ln) + text
         mode: actions.NoteMode = "once" if self.query_one("#answer-mode", RadioSet).pressed_index == 1 else "plain"
         self.run_argv(actions.note_argv(self.ap_bin, s.ref.run_dir.name, note, mode), s.ref.repo)
         box.value = ""
+
+    def action_leave_answer(self) -> None:
+        """Leave the answer box for the owner list, so tab keys work again."""
+        if self.focused is self.query_one("#answer", Input):
+            self.query_one("#ownerlist", ListView).focus()
 
     def action_show_tab(self, tab: str) -> None:
         """Switch tab."""
@@ -796,7 +901,9 @@ class Dash(App[None]):
             self.write_seen()
             self.render_feed()
         self.last_tab = tab
-        if tab == "feed-tab":
+        if tab == "fyi":
+            self.query_one("#fyi-scroll", VerticalScroll).focus()
+        elif tab == "feed-tab":
             log = self.query_one("#feed", RichLog)
             log.focus()
             self.call_after_refresh(log.scroll_end, animate=False)
@@ -815,6 +922,13 @@ class Dash(App[None]):
         if panes:
             self.query_one(TabbedContent).active = "runs"
             panes[min(max(n, 1), len(panes)) - 1].stream_log.focus()
+
+    def action_step_pane(self, step: int) -> None:
+        """Focus the previous or next pane, wrapping around."""
+        panes = list(self.query(RunPane))
+        if panes:
+            i = next((n for n, p in enumerate(panes) if p.has_focus_within), 0)
+            panes[(i + step) % len(panes)].stream_log.focus()
 
     def action_show_all(self) -> None:
         """Show or hide finished and missing runs."""
@@ -882,6 +996,20 @@ class Dash(App[None]):
             p.stream_log.scroll_end(animate=False)
 
 
+def owner_row(s: Shown, ln: str, a: model.Answer | None) -> Text:
+    """Build one owner list row: unanswered rows stand out, answered ones say where."""
+    repo = f"{model.clean(s.ref.repo.name)} "
+    if a is None:
+        return Text.assemble(("● ", "bold red"), (repo, "bold"), (model.clean(ln[2:]), "bold"))
+    seen, style = ("applied", "green") if a.applied else ("not applied yet", "yellow")
+    return Text.assemble(
+        ("✓ ", style),
+        (repo, "bold"),
+        (model.clean(ln[2:]), "dim"),
+        (f"\n  answered in note {a.note} ({seen})", style),
+    )
+
+
 def feed_signature(
     runs: list[tuple[model.RunRef, model.RunFiles]], boards: list[Path]
 ) -> tuple[tuple[str, float, int], ...]:
@@ -917,5 +1045,5 @@ def board_strip(boards: list[Path], now: float) -> Text:
         for f, lines in model.board_lines(board):
             last = next((ln for ln in reversed(lines) if ln.startswith("- ")), "")
             out.append(f"\n  {model.clean(f.stem)}  ", style="bold")
-            out.append(model.clean(last[2:])[:160])
+            out.append(model.clean(last[2:]))
     return out

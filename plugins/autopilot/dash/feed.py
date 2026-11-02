@@ -62,7 +62,7 @@ def runner_events(ref: model.RunRef, log: list[str], result_of: Callable[[Path],
             continue
         body = model.clean(m.group(2))
         if e := END.match(body):
-            summary = first_line(result_of(ref.run_dir / "sessions" / f"{e.group(1)}.jsonl"))[:140]
+            summary = first_line(result_of(ref.run_dir / "sessions" / f"{e.group(1)}.jsonl"))
             head = " ".join(x for x in (f"s{e.group(1)}", e.group(2), e.group(3)) if x)
             text = f"{head}  {summary}" if summary else head
             out.append(FeedEvent(at, who, Text(text, style="red" if e.group(2) in RED_EXITS else "")))
@@ -74,7 +74,7 @@ def runner_events(ref: model.RunRef, log: list[str], result_of: Callable[[Path],
 def stamped(lines: str, pattern: re.Pattern[str], who: str, label: str, style: str) -> list[FeedEvent]:
     """Turn lines whose stamp parses into feed lines with a label."""
     return [
-        FeedEvent(at, who, Text(f"{label} · {model.clean(m.group(2))[:150]}", style=style))
+        FeedEvent(at, who, Text(f"{label} · {model.clean(m.group(2))}", style=style))
         for line in lines.splitlines()
         if (m := pattern.match(line)) and (at := model.parse_stamp(m.group(1))) is not None
     ]
@@ -99,7 +99,7 @@ def board_events(board: Path) -> list[FeedEvent]:
             elif (m := BOARD_POST.match(line)) and not m.group(2).startswith("owner → "):
                 at = model.parse_stamp(m.group(1))
                 if at is not None:
-                    out.append(FeedEvent(at, who, Text(f"board · {model.clean(m.group(2))[:160]}", style="cyan")))
+                    out.append(FeedEvent(at, who, Text(f"board · {model.clean(m.group(2))}", style="cyan")))
     return out
 
 

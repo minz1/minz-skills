@@ -170,6 +170,41 @@ def owner_items(plan: str) -> list[str]:
     return [line for line in section(plan, "Owner") if line.startswith("- ")]
 
 
+def notes_applied(plan: str) -> int:
+    """Return how many owner notes the run has applied."""
+    h = header(plan, "owner-notes-applied")
+    return int(h) if h.isdigit() else 0
+
+
+def fyi_items(plan: str) -> list[str]:
+    """Return the items under ## FYI."""
+    return [line for line in section(plan, "FYI") if line.startswith("- ")]
+
+
+def answer_quote(item: str) -> str:
+    """Return the quote an owner answer opens with, for an owner item line."""
+    return f'Re owner item "{clean(item[2:])[:70]}": '
+
+
+@dataclass(frozen=True)
+class Answer:
+    """The owner's latest answer to an owner item."""
+
+    note: int
+    text: str
+    applied: bool
+
+
+def answer_of(item: str, owner_md: str, applied: int) -> Answer | None:
+    """Find the latest note answering an owner item."""
+    quote = answer_quote(item)
+    notes = [ln for ln in owner_md.splitlines() if ln.startswith("- ")]
+    for n in range(len(notes), 0, -1):
+        if (i := notes[n - 1].find(quote)) >= 0:
+            return Answer(n, clean(notes[n - 1][i + len(quote) :]), n <= applied)
+    return None
+
+
 def blocked_count(plan: str) -> int:
     """Count [!] and [!!] items."""
     return len(re.findall(r"^- \[!!?\]", plan, re.MULTILINE))
@@ -276,14 +311,13 @@ def history_row(log: list[str]) -> Text:
 
 def notes_row(files: RunFiles, git: str) -> Text:
     """Build the git and owner notes row."""
-    applied_h = header(files.plan, "owner-notes-applied")
-    applied = int(applied_h) if applied_h.isdigit() else 0
+    applied = notes_applied(files.plan)
     notes = len(re.findall(r"^- ", files.owner_md, re.MULTILINE))
     out = Text(f"{clean(git)}  ·  notes {applied}/{notes}")
     if notes > applied:
         out.append(f" ({notes - applied} pending)", style="yellow")
-    if own := len(owner_items(files.plan)):
-        out.append(f"  ·  owner {own}", style="bold red")
+    if fyi := len(fyi_items(files.plan)):
+        out.append(f"  ·  fyi {fyi}", style="dim")
     return out
 
 
