@@ -790,6 +790,8 @@ test_checkpoint_skips_ignored() {
   git -C "$repo" rev-parse --verify refs/autopilot/t/1 >/dev/null || die "ref missing"
 }
 test_peak_ctx_logged() { setup; sc 1 "$DONE"; go; log_has "peak_ctx=43005"; }
+test_five_reset_logged() { setup; sc 1 "$DONE"; go; log_has "peak_ctx=43005 five_reset=2026-10-21T16:30:00Z"; }
+test_five_reset_unknown() { setup; sc 1 "$DONE" '{"usage":null}'; go; log_has "five_hour=? peak_ctx=43005 five_reset=?"; }
 test_peak_ctx_ignores_subagents() {
   setup; sc 1 "$DONE" '{"subagent_ctx":150000}'; go; log_has "peak_ctx=43005"
 }
@@ -1014,6 +1016,8 @@ out=$(test_invalid_cap_refused 2>/dev/null); t test_invalid_cap_refused "$out" $
 out=$(test_stop_reason_with_quotes 2>/dev/null); t test_stop_reason_with_quotes "$out" $?
 out=$(test_checkpoint_skips_ignored 2>/dev/null); t test_checkpoint_skips_ignored "$out" $?
 out=$(test_peak_ctx_logged 2>/dev/null); t test_peak_ctx_logged "$out" $?
+out=$(test_five_reset_logged 2>/dev/null); t test_five_reset_logged "$out" $?
+out=$(test_five_reset_unknown 2>/dev/null); t test_five_reset_unknown "$out" $?
 out=$(test_peak_ctx_ignores_subagents 2>/dev/null); t test_peak_ctx_ignores_subagents "$out" $?
 out=$(test_flags 2>/dev/null); t test_flags "$out" $?
 out=$(test_claude_env_scrubbed 2>/dev/null); t test_claude_env_scrubbed "$out" $?

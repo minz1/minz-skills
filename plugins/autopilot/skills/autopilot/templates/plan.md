@@ -28,7 +28,10 @@ and what is explicitly out of scope>
 <work found but out of scope, or on the stop list; never worked by autopilot>
 
 ## Owner
-<only the owner can do or allow these; major findings a session won't fix>
+<only what needs the owner to act or answer: decisions, approvals, allow rules, secrets, manual tests>
+
+## FYI
+<what the owner should know but need not answer: owner-proxy RULING [review] lines, deviations, major findings a session won't fix>
 
 ## Handoff
 <rewritten every session, at most ~40 lines: state, open branches/worktrees,

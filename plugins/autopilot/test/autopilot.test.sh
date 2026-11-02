@@ -398,7 +398,7 @@ test_status_new_states() {
   ap status; has "$OUT" "2 done, 1 committed, 1 pushed, 0 blocked, 1 open" status
 }
 test_status_owner_section() {
-  setup; printf '%s\n' '## Owner' '- o1' '- o2' '- o3' '- o4' '## Handoff' 'h' >> "$R2/plan.md"
+  setup; printf '%s\n' '## Owner' '- o1' '- o2' '- o3' '- o4' '## FYI' '- f1' '## Handoff' 'h' >> "$R2/plan.md"
   ap status; has "$OUT" "owner: 4" status; has "$OUT" "  - o3" status; lacks "$OUT" "  - o4" status
 }
 test_note_once() { setup; ap note --once "skip it"; grep -qE '^- [0-9T:-]+Z \[once\] skip it$' "$R2/owner.md" || die "$(cat "$R2/owner.md")"; }

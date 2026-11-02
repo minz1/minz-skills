@@ -30,14 +30,15 @@ test_new_rules() {
   in_skill '[c]' 'committed locally' 'refs/heads/ship/<id>' 'ahead-cap:' 'ack-timeout:' 'serves: <repo>' 'ship: <group>' 'findings:' \
     "git diff --stat A B -- . ':!.autopilot' ':!.gitignore'" 'reject <id>' 'nack <id>' 'watch <id>' 'done <repo>' '(replaces <old-id>)'
 }
-test_owner_rules() { in_skill '## Owner' 'deviated: <why>' 'owner-notes-used:' '[once]' 'short paraphrase'; }
+test_owner_rules() { in_skill '## Owner' '## FYI' 'FYI lines never alert' 'deviated: <why>' 'owner-notes-used:' '[once]' 'short paraphrase'; }
+test_commands() { in_skill 'Run one command per call' 'quote globs' 'retry once in the exact allow-rule form' 'the one exception is the detached-job form' 'still ahead of `date -u`' 'a reset already past, work normally' 'STOP denied: <command>' 'five_reset=' 'Keep usage thresholds out of the Stop list'; }
 test_planning_rules() { in_skill 'pgrep -af autopilot-runner' '.claude/settings.local.json' 'Resolve every SHA' 'should be tracked' '.config/autopilot/weekly-ceiling'; }
 test_interim_legacy() {
   in_skill '## Interim: legacy plans' 'legacy: true' 'Remove this section once'
   ! grep -qE '^(protocol|legacy):' "$PLAN" || die "template carries a version header"
 }
 test_templates() {
-  local k; for k in '^serves:' '^ahead-cap: 2' '^ack-timeout: 6h' '^owner-notes-used:' '^## Owner'; do grep -q "$k" "$PLAN" || die "plan template lacks $k"; done
+  local k; for k in '^serves:' '^ahead-cap: 2' '^ack-timeout: 6h' '^owner-notes-used:' '^## Owner' '^## FYI'; do grep -q "$k" "$PLAN" || die "plan template lacks $k"; done
   for k in '## Long commands' '## Shared tool locks' '## Peers'; do grep -qF "$k" "$DIR/../skills/autopilot/templates/rules.md" || die "rules template lacks $k"; done
 }
 
@@ -97,6 +98,7 @@ out=$(test_now_marker 2>/dev/null); t test_now_marker "$out" $?
 out=$(test_usage_line 2>/dev/null); t test_usage_line "$out" $?
 out=$(test_new_rules 2>/dev/null); t test_new_rules "$out" $?
 out=$(test_owner_rules 2>/dev/null); t test_owner_rules "$out" $?
+out=$(test_commands 2>/dev/null); t test_commands "$out" $?
 out=$(test_planning_rules 2>/dev/null); t test_planning_rules "$out" $?
 out=$(test_interim_legacy 2>/dev/null); t test_interim_legacy "$out" $?
 out=$(test_templates 2>/dev/null); t test_templates "$out" $?

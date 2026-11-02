@@ -20,7 +20,7 @@ review: <handling reviewer findings, e.g. superpowers:receiving-code-review>
 <how fleet agents are launched, where their logs are, how to tell running from exited>
 
 ## Stop list
-<what a session must stop for and exit STOP: destructive actions, spending, anything needing the owner>
+<what a session must stop for and exit STOP: destructive actions, spending, anything needing the owner; not usage thresholds, which the runner handles>
 
 ## Where to look for more work
 <open scope only: files, surveys and findings that feed new items>
